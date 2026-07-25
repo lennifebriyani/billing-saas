@@ -2,7 +2,8 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { getClaims } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import { addProduct, deleteProduct, inviteMember, upgradePlan } from './actions'
+import { addProduct, deleteProduct, inviteMember } from './actions'
+import SubscribeButton from '@/components/SubscribeButton'
 
 type PageProps = {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>
@@ -32,8 +33,8 @@ export default async function DashboardPage({ searchParams }: PageProps) {
     }
   )
 
-  // Query produk
-  const { data: products, error } = await supabase
+  // Query produk terisolasi RLS
+  const { data: products } = await supabase
     .from('products')
     .select('*')
     .order('created_at', { ascending: false })
@@ -125,8 +126,8 @@ export default async function DashboardPage({ searchParams }: PageProps) {
           </div>
         </div>
 
-        {/* SECTION: Mock Banner Upgrade ke PRO (Hanya jika belum PRO & Admin) */}
-        {!isPro && isAdmin && (
+        {/* SECTION: Banner Upgrade ke PRO dengan Integrasi Midtrans */}
+        {isAdmin && (
           <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 rounded-xl shadow-md text-white flex flex-col sm:flex-row justify-between items-center gap-4">
             <div>
               <h3 className="text-lg font-bold">⚡ Upgrade ke Paket PRO</h3>
@@ -134,14 +135,13 @@ export default async function DashboardPage({ searchParams }: PageProps) {
                 Dapatkan akses tanpa batas untuk menambah produk dan fitur eksklusif lainnya.
               </p>
             </div>
-            <form action={upgradePlan}>
-              <button
-                type="submit"
-                className="px-5 py-2.5 bg-white text-amber-800 hover:bg-amber-50 font-bold text-sm rounded-lg shadow transition cursor-pointer whitespace-nowrap"
-              >
-                Upgrade Sekarang (Rp 199k/bln)
-              </button>
-            </form>
+            
+            {/* Tombol Midtrans Snap dengan Data Real */}
+            <SubscribeButton
+              tenantId={tenantId || 'guest-tenant'}
+              tenantName={user.email?.split('@')[0] || 'Tenant Admin'}
+              email={user.email || ''}
+            />
           </div>
         )}
 
@@ -162,11 +162,11 @@ export default async function DashboardPage({ searchParams }: PageProps) {
                 name="email"
                 placeholder="Email member yang terdaftar"
                 required
-                className="flex-1 px-4 py-2 border rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
               <select
                 name="role"
-                className="px-3 py-2 border rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
                 <option value="member">Role: Member</option>
                 <option value="admin">Role: Admin</option>
@@ -202,14 +202,14 @@ export default async function DashboardPage({ searchParams }: PageProps) {
                 name="name"
                 placeholder="Nama Produk"
                 required
-                className="flex-1 px-4 py-2 border rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
               <input
                 type="number"
                 name="price"
                 placeholder="Harga (Rp)"
                 required
-                className="w-full sm:w-48 px-4 py-2 border rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full sm:w-48 px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
               <button
                 type="submit"
@@ -237,7 +237,7 @@ export default async function DashboardPage({ searchParams }: PageProps) {
               {products.map((item) => (
                 <div 
                   key={item.id} 
-                  className="p-4 border rounded-lg flex justify-between items-center hover:bg-slate-50 transition"
+                  className="p-4 border border-slate-200 rounded-lg flex justify-between items-center hover:bg-slate-50 transition"
                 >
                   <div>
                     <p className="font-medium text-slate-800">{item.name}</p>
