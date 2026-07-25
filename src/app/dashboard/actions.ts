@@ -161,3 +161,40 @@ export async function inviteMember(formData: FormData) {
   revalidatePath('/dashboard')
   redirect('/dashboard?success=member_invited')
 }
+
+// Tambahkan di bagian bawah src/app/dashboard/actions.ts
+
+export async function upgradePlan() {
+  const cookieStore = await cookies()
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          } catch {}
+        },
+      },
+    }
+  )
+
+  // Panggil RPC Function upgrade_tenant_plan
+  const { error } = await supabase.rpc('upgrade_tenant_plan', {
+    new_plan: 'pro',
+  })
+
+  if (error) {
+    console.error('Gagal upgrade plan:', error.message)
+    redirect(`/dashboard?error=${encodeURIComponent(error.message)}`)
+  }
+
+  revalidatePath('/dashboard')
+  redirect('/dashboard?success=upgraded')
+}

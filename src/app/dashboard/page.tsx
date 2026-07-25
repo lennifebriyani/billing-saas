@@ -2,14 +2,14 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { getClaims } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import { addProduct, deleteProduct, inviteMember } from './actions'
+import { addProduct, deleteProduct, inviteMember, upgradePlan } from './actions'
 
 type PageProps = {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }
 
 export default async function DashboardPage({ searchParams }: PageProps) {
-  const { user, tenantId, role } = await getClaims()
+  const { user, tenantId, role, plan } = await getClaims()
   const params = await searchParams
   const errorParam = params.error
   const successParam = params.success
@@ -38,9 +38,10 @@ export default async function DashboardPage({ searchParams }: PageProps) {
     .select('*')
     .order('created_at', { ascending: false })
 
-  const MAX_FREE_PRODUCTS = 3
+  const isPro = plan === 'pro'
+  const MAX_PRODUCTS = isPro ? Infinity : 3
   const currentCount = products?.length || 0
-  const isLimitReached = currentCount >= MAX_FREE_PRODUCTS
+  const isLimitReached = !isPro && currentCount >= MAX_PRODUCTS
   const isAdmin = role === 'admin'
 
   return (
@@ -71,10 +72,10 @@ export default async function DashboardPage({ searchParams }: PageProps) {
           </div>
         )}
 
-        {successParam === 'member_invited' && (
+        {successParam === 'upgraded' && (
           <div className="p-4 bg-emerald-50 border-l-4 border-emerald-500 rounded-r-xl text-emerald-800 text-sm shadow-sm">
-            <p className="font-bold">🎉 Berhasil!</p>
-            <p>Member telah berhasil didaftarkan ke Tenant ini. Saat member tersebut login, ia akan otomatis terhubung.</p>
+            <p className="font-bold">🎉 Upgrade Berhasil!</p>
+            <p>Selamat! Akun tenant Anda kini berstatus <strong>PRO Plan</strong> dengan kuota produk tanpa batas.</p>
           </div>
         )}
 
@@ -88,8 +89,10 @@ export default async function DashboardPage({ searchParams }: PageProps) {
               <span className="px-3 py-1 bg-indigo-800 text-indigo-200 rounded-full text-xs font-mono font-bold uppercase">
                 Role: {role}
               </span>
-              <span className="px-3 py-1 bg-indigo-950 text-indigo-300 rounded-full text-xs font-mono">
-                Plan: Free
+              <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold uppercase ${
+                isPro ? 'bg-amber-400 text-amber-950' : 'bg-indigo-950 text-indigo-300'
+              }`}>
+                Plan: {plan}
               </span>
             </div>
           </div>
@@ -105,18 +108,42 @@ export default async function DashboardPage({ searchParams }: PageProps) {
           <div className="pt-2 border-t border-indigo-800 space-y-2">
             <div className="flex justify-between text-xs text-indigo-200">
               <span>Penggunaan Kuota Produk</span>
-              <span className="font-bold font-mono">{currentCount} / {MAX_FREE_PRODUCTS} Produk</span>
+              <span className="font-bold font-mono">
+                {currentCount} / {isPro ? '∞ (Unlimited)' : `${MAX_PRODUCTS} Produk`}
+              </span>
             </div>
-            <div className="w-full bg-indigo-950 h-2 rounded-full overflow-hidden">
-              <div 
-                className={`h-full transition-all duration-300 ${
-                  isLimitReached ? 'bg-amber-400' : 'bg-emerald-400'
-                }`}
-                style={{ width: `${Math.min((currentCount / MAX_FREE_PRODUCTS) * 100, 100)}%` }}
-              />
-            </div>
+            {!isPro && (
+              <div className="w-full bg-indigo-950 h-2 rounded-full overflow-hidden">
+                <div 
+                  className={`h-full transition-all duration-300 ${
+                    isLimitReached ? 'bg-amber-400' : 'bg-emerald-400'
+                  }`}
+                  style={{ width: `${Math.min((currentCount / MAX_PRODUCTS) * 100, 100)}%` }}
+                />
+              </div>
+            )}
           </div>
         </div>
+
+        {/* SECTION: Mock Banner Upgrade ke PRO (Hanya jika belum PRO & Admin) */}
+        {!isPro && isAdmin && (
+          <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 rounded-xl shadow-md text-white flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div>
+              <h3 className="text-lg font-bold">⚡ Upgrade ke Paket PRO</h3>
+              <p className="text-xs text-amber-100 mt-1">
+                Dapatkan akses tanpa batas untuk menambah produk dan fitur eksklusif lainnya.
+              </p>
+            </div>
+            <form action={upgradePlan}>
+              <button
+                type="submit"
+                className="px-5 py-2.5 bg-white text-amber-800 hover:bg-amber-50 font-bold text-sm rounded-lg shadow transition cursor-pointer whitespace-nowrap"
+              >
+                Upgrade Sekarang (Rp 199k/bln)
+              </button>
+            </form>
+          </div>
+        )}
 
         {/* SECTION: Undang Member Baru (RBAC: Khusus Admin) */}
         {isAdmin ? (
@@ -133,7 +160,7 @@ export default async function DashboardPage({ searchParams }: PageProps) {
               <input
                 type="email"
                 name="email"
-                placeholder="Email member yang terdaftar (misal: kasir@gmail.com)"
+                placeholder="Email member yang terdaftar"
                 required
                 className="flex-1 px-4 py-2 border rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
@@ -166,7 +193,7 @@ export default async function DashboardPage({ searchParams }: PageProps) {
 
           {isLimitReached ? (
             <div className="p-4 bg-slate-100 text-slate-600 rounded-lg text-sm text-center">
-              🔒 Kuota penambahan produk telah penuh ({currentCount}/{MAX_FREE_PRODUCTS}). Hapus salah satu produk atau upgrade paket Anda.
+              🔒 Kuota penambahan produk telah penuh ({currentCount}/{MAX_PRODUCTS}). Upgrade paket Anda untuk menambah lebih banyak produk.
             </div>
           ) : (
             <form action={addProduct} className="flex flex-col sm:flex-row gap-3">
@@ -220,8 +247,6 @@ export default async function DashboardPage({ searchParams }: PageProps) {
                     <p className="font-bold text-slate-900">
                       Rp {Number(item.price).toLocaleString('id-ID')}
                     </p>
-                    
-                    {/* RBAC: Hanya Admin yang bisa melihat tombol Hapus */}
                     {isAdmin ? (
                       <form action={deleteProduct}>
                         <input type="hidden" name="id" value={item.id} />
