@@ -1,16 +1,16 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import crypto from 'crypto'
+import { NextResponse } from 'next/server';
+import crypto from 'crypto';
+import { createClient } from '@supabase/supabase-js';
 
-// Gunakan Service Role Key agar bisa bypass RLS untuk update database via Webhook
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+// Inisialisasi Supabase Client dengan URL proyek kamu
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://usoyrvhgydcdnzhyahvp.supabase.co';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-export async function POST(req: Request) {
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+export async function POST(request: Request) {
   try {
-    const notification = await req.json()
+    const body = await request.json();
 
     const {
       order_id,
@@ -19,69 +19,65 @@ export async function POST(req: Request) {
       signature_key,
       transaction_status,
       fraud_status,
-    } = notification
+    } = body;
 
-    // 1. Validasi Signature Key dari Midtrans untuk keamanan
-    const serverKey = process.env.MIDTRANS_SERVER_KEY || ''
-    const mySignatureKey = crypto
+    // 1. Verifikasi Signature Key dari Midtrans
+    const serverKey = process.env.MIDTRANS_SERVER_KEY || '';
+    const hash = crypto
       .createHash('sha512')
-      .update(order_id + status_code + gross_amount + serverKey)
-      .digest('hex')
+      .update(`${order_id}${status_code}${gross_amount}${serverKey}`)
+      .digest('hex');
 
-    if (mySignatureKey !== signature_key) {
-      return NextResponse.json({ error: 'Invalid signature key' }, { status: 400 })
+    if (hash !== signature_key) {
+      return NextResponse.json({ message: 'Invalid signature' }, { status: 403 });
     }
 
-    // 2. Cek Status Transaksi dari Midtrans
-    let subscriptionStatus = 'pending'
-    let planType = 'free'
-
-    if (
-      transaction_status === 'capture' ||
-      transaction_status === 'settlement'
-    ) {
+    // 2. Update Status Langganan di Database Supabase
+    if (transaction_status === 'capture' || transaction_status === 'settlement') {
       if (fraud_status === 'accept' || !fraud_status) {
-        subscriptionStatus = 'active'
-        planType = 'pro' // Ubah plan tenant menjadi PRO
+        const { error } = await supabase
+          .from('subscriptions')
+          .update({ 
+            status: 'ACTIVE',
+            updated_at: new Date().toISOString() 
+          })
+          .eq('order_id', order_id);
+
+        if (error) console.error('Error updating Supabase:', error);
+        console.log(`[PAYMENT SUCCESS] Order ID: ${order_id}`);
       }
     } else if (
       transaction_status === 'cancel' ||
       transaction_status === 'deny' ||
       transaction_status === 'expire'
     ) {
-      subscriptionStatus = 'failed'
+      const { error } = await supabase
+        .from('subscriptions')
+        .update({ 
+          status: 'EXPIRED',
+          updated_at: new Date().toISOString() 
+        })
+        .eq('order_id', order_id);
+
+      if (error) console.error('Error updating Supabase:', error);
+      console.log(`[PAYMENT FAILED/EXPIRED] Order ID: ${order_id}`);
+    } else if (transaction_status === 'pending') {
+      const { error } = await supabase
+        .from('subscriptions')
+        .update({ 
+          status: 'PENDING',
+          updated_at: new Date().toISOString() 
+        })
+        .eq('order_id', order_id);
+
+      if (error) console.error('Error updating Supabase:', error);
+      console.log(`[PAYMENT PENDING] Order ID: ${order_id}`);
     }
 
-    // 3. Update status tenant di database Supabase jika pembayaran sukses
-    if (planType === 'pro') {
-      const parts = order_id.split('-')
-      const tenantPrefix = parts[1]
-
-      // Cari tenant berdasarkan ID prefix yang ada di order_id
-      const { data: tenants } = await supabaseAdmin
-        .from('tenants')
-        .select('id')
-        .ilike('id', `${tenantPrefix}%`)
-
-      if (tenants && tenants.length > 0) {
-        const targetTenantId = tenants[0].id
-
-        await supabaseAdmin
-          .from('tenants')
-          .update({
-            plan_type: 'pro',
-            subscription_status: subscriptionStatus,
-          })
-          .eq('id', targetTenantId)
-      }
-    }
-
-    return NextResponse.json({ status: 'OK' })
-  } catch (error: any) {
-    console.error('Webhook Error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Internal Server Error' },
-      { status: 500 }
-    )
+    // 3. Respon 200 OK ke Midtrans
+    return NextResponse.json({ status: 'OK' }, { status: 200 });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
   }
 }

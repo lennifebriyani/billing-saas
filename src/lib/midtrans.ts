@@ -1,7 +1,8 @@
-import midtransClient from 'midtrans-client'
+// @ts-expect-error - midtrans-client tidak menyediakan tipe TypeScript bawaan
+import midtransClient from 'midtrans-client';
 
 export const snap = new midtransClient.Snap({
   isProduction: process.env.MIDTRANS_IS_PRODUCTION === 'true',
   serverKey: process.env.MIDTRANS_SERVER_KEY || '',
-  clientKey: process.env.MIDTRANS_CLIENT_KEY || '',
-})
+  clientKey: process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY || '',
+});

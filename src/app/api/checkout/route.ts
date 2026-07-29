@@ -1,45 +1,79 @@
-import { NextResponse } from 'next/server'
-import { snap } from '@/lib/midtrans'
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
-export async function POST(req: Request) {
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://usoyrvhgydcdnzhyahvp.supabase.co';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+export async function POST(request: Request) {
   try {
-    const body = await req.json()
-    const { tenantId, tenantName, email } = body
+    const { userId, userEmail, planName, amount } = await request.json();
 
-    // Buat kode transaksi unik
-    const orderId = `SUBS-${tenantId.slice(0, 5)}-${Date.now()}`
-
-    const parameter = {
-      transaction_details: {
-        order_id: orderId,
-        gross_amount: 200000, // Nominal langganan Rp 200.000
-      },
-      customer_details: {
-        first_name: tenantName,
-        email: email,
-      },
-      item_details: [
-        {
-          id: 'PLAN-MONTHLY-200K',
-          price: 200000,
-          quantity: 1,
-          name: 'Langganan SaaS Billing (1 Bulan)',
-        },
-      ],
+    if (!userId || !amount) {
+      return NextResponse.json({ message: 'User ID and Amount are required' }, { status: 400 });
     }
 
-    // Minta token transaksi dari Midtrans Snap
-    const transaction = await snap.createTransaction(parameter)
+    // 1. Buat Order ID Unik (contoh: ORDER-1722250000-XYZ)
+    const orderId = `ORDER-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
+    // 2. Simpan record awal di tabel 'subscriptions' Supabase dengan status PENDING
+    const { error: dbError } = await supabase.from('subscriptions').insert({
+      user_id: userId,
+      order_id: orderId,
+      status: 'PENDING',
+    });
+
+    if (dbError) {
+      console.error('Database error:', dbError);
+      return NextResponse.json({ message: 'Failed to create subscription record' }, { status: 500 });
+    }
+
+    // 3. Panggil API Midtrans Snap untuk mendapatkan Snap Token & Redirect URL
+    const serverKey = process.env.MIDTRANS_SERVER_KEY || '';
+    const authHeader = Buffer.from(`${serverKey}:`).toString('base64');
+
+    // Menggunakan endpoint Production Midtrans Snap
+    const midtransResponse = await fetch('https://app.midtrans.com/snap/v1/transactions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${authHeader}`,
+      },
+      body: JSON.stringify({
+        transaction_details: {
+          order_id: orderId,
+          gross_amount: amount,
+        },
+        customer_details: {
+          email: userEmail,
+        },
+        item_details: [
+          {
+            id: planName || 'PRO_PLAN',
+            price: amount,
+            quantity: 1,
+            name: `Subscription Plan: ${planName || 'Pro'}`,
+          },
+        ],
+      }),
+    });
+
+    const snapData = await midtransResponse.json();
+
+    if (!midtransResponse.ok) {
+      console.error('Midtrans Error:', snapData);
+      return NextResponse.json({ message: 'Midtrans transaction creation failed' }, { status: 500 });
+    }
+
+    // 4. Kirim token & redirect_url ke Frontend
     return NextResponse.json({
-      token: transaction.token,
-      redirect_url: transaction.redirect_url,
-    })
-  } catch (error: any) {
-    console.error('Midtrans Error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Gagal memproses transaksi' },
-      { status: 500 }
-    )
+      token: snapData.token,
+      redirect_url: snapData.redirect_url,
+      order_id: orderId,
+    });
+  } catch (error) {
+    console.error('Checkout error:', error);
+    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
   }
 }
