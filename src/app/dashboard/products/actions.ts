@@ -1,86 +1,57 @@
-"use server";
+'use server';
 
-import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
-import { getCurrentTenant } from "@/lib/tenant";
+import { createClient } from '@/lib/supabase/server';
+import { revalidatePath } from 'next/cache';
 
-export async function getProducts() {
-  try {
-    const supabase = await createClient();
-    const tenant = await getCurrentTenant();
+export async function createCatalogItem(formData: FormData): Promise<void> {
+  const supabase = await createClient();
 
-    if (!tenant) {
-      console.warn("getProducts: Tenant tidak ditemukan.");
-      return [];
-    }
+  const name = formData.get('name') as string;
+  const sku = formData.get('sku') as string;
+  const price = parseFloat(formData.get('price') as string);
+  const stock = parseInt(formData.get('stock') as string, 10);
+  const type = (formData.get('type') as string) || 'PRODUCT';
 
-    const { data, error } = await supabase
-      .from("products")
-      .select("*")
-      .eq("tenant_id", tenant.id)
-      .order("created_at", { ascending: false });
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
 
-    if (error) {
-      console.error("Gagal mengambil daftar produk:", error.message);
-      return [];
-    }
+  const { data: membership } = await supabase
+    .from('tenant_memberships')
+    .select('tenant_id')
+    .eq('user_id', user.id)
+    .single();
 
-    return data || [];
-  } catch (err: any) {
-    console.error("Error getProducts:", err);
-    return [];
+  if (!membership) return;
+
+  const { error } = await supabase.from('catalog_items').insert({
+    tenant_id: membership.tenant_id,
+    name,
+    sku: sku || null,
+    price,
+    stock,
+    type,
+  });
+
+  if (error) {
+    console.error('Create Catalog Item Error:', error.message);
+    return;
   }
+
+  revalidatePath('/dashboard/products');
 }
 
-export async function addProduct(data: { name: string; price: number; stock: number }) {
-  try {
-    const supabase = await createClient();
-    const tenant = await getCurrentTenant();
+export async function deleteCatalogItem(id: string): Promise<void> {
+  const supabase = await createClient();
 
-    if (!tenant) {
-      throw new Error("Tenant tidak ditemukan atau sesi login telah berakhir.");
-    }
+  const { error } = await supabase
+    .from('catalog_items')
+    .delete()
+    .eq('id', id);
 
-    const { error } = await supabase.from("products").insert({
-      tenant_id: tenant.id,
-      name: data.name,
-      price: Number(data.price),
-      stock: Number(data.stock),
-      is_active: true,
-    });
-
-    if (error) {
-      console.error("Supabase Add Product Error:", error);
-      throw new Error(`Gagal menyimpan ke database: ${error.message}`);
-    }
-
-    revalidatePath("/dashboard/products");
-    revalidatePath("/dashboard/pos");
-    return { success: true };
-  } catch (err: any) {
-    console.error("Error addProduct:", err);
-    throw new Error(err.message || "Gagal menambah produk baru.");
+  if (error) {
+    console.error('Delete Catalog Item Error:', error.message);
+    return;
   }
-}
 
-export async function toggleProductStatus(id: string, currentStatus: boolean) {
-  try {
-    const supabase = await createClient();
-
-    const { error } = await supabase
-      .from("products")
-      .update({ is_active: !currentStatus })
-      .eq("id", id);
-
-    if (error) {
-      console.error("Gagal mengubah status produk:", error.message);
-      throw new Error(error.message);
-    }
-
-    revalidatePath("/dashboard/products");
-    revalidatePath("/dashboard/pos");
-  } catch (err: any) {
-    console.error("Error toggleProductStatus:", err);
-    throw new Error("Gagal mengubah status produk.");
-  }
+  revalidatePath('/dashboard/products');
 }

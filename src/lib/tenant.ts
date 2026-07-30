@@ -1,89 +1,79 @@
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from '@/lib/supabase/server';
 
-export interface TenantInfo {
+export interface Tenant {
   id: string;
   name: string;
   slug: string;
+  business_type: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TenantWithRole extends Tenant {
   role: string;
 }
 
 /**
-  Mengambil data Tenant milik user yang sedang login.
-  Jika user belum punya tenant (misal: akun lama), otomatis buatkan 1 Tenant default.
+ * Mengambil data tenant aktif beserta role user di tenant tersebut
  */
-export async function getCurrentTenant(): Promise<TenantInfo | null> {
+export async function getCurrentTenant(): Promise<TenantWithRole | null> {
   const supabase = await createClient();
 
-  // 1. Cek User yang sedang Login
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
 
-  if (authError || !user) {
-    return null;
-  }
-
-  // 2. Ambil data tenant_users milik user ini
-  const { data: tenantUsers, error: tenantError } = await supabase
-    .from("tenant_users")
-    .select("role, tenant_id, tenants(id, name, slug, status)")
-    .eq("user_id", user.id)
-    .limit(1);
-
-  if (tenantError) {
-    console.error("Error fetching tenant user:", tenantError);
-  }
-
-  // 3. Jika sudah punya tenant, kembalikan datanya
-  if (tenantUsers && tenantUsers.length > 0) {
-    const tu = tenantUsers[0];
-    const t = tu.tenants as unknown as { id: string; name: string; slug: string; status: string };
-
-    return {
-      id: t.id,
-      name: t.name,
-      slug: t.slug,
-      role: tu.role,
-    };
-  }
-
-  // 4. JIKA BELUM PUNYA TENANT (Auto-Onboarding untuk user lama)
-  const defaultSlug = `tenant-${user.id.slice(0, 8)}`;
-  const defaultName = user.email ? `Toko ${user.email.split("@")[0]}` : "Toko Saya";
-
-  // Insert ke tabel tenants
-  const { data: newTenant, error: createTenantErr } = await supabase
-    .from("tenants")
-    .insert({
-      name: defaultName,
-      slug: defaultSlug,
-      status: "active",
-    })
-    .select()
+  // Ambil membership sekaligus role dan data tenant
+  const { data: membership } = await supabase
+    .from('tenant_memberships')
+    .select('tenant_id, role, tenants(*)')
+    .eq('user_id', user.id)
     .single();
 
-  if (createTenantErr || !newTenant) {
-    console.error("Gagal membuat tenant default:", createTenantErr);
-    return null;
-  }
+  if (!membership || !membership.tenants) return null;
 
-  // Hubungkan user ke tenant baru sebagai 'owner'
-  const { error: linkUserErr } = await supabase.from("tenant_users").insert({
-    tenant_id: newTenant.id,
-    user_id: user.id,
-    role: "owner",
-  });
+  const tenantObj = Array.isArray(membership.tenants)
+    ? (membership.tenants[0] as unknown as Tenant)
+    : (membership.tenants as unknown as Tenant);
 
-  if (linkUserErr) {
-    console.error("Gagal menghubungkan user ke tenant:", linkUserErr);
-    return null;
-  }
+  if (!tenantObj) return null;
+
+  // Gabungkan data tenant dengan role dari membership
+  return {
+    ...tenantObj,
+    role: membership.role || 'STAFF',
+  };
+}
+
+/**
+ * Mengambil data langganan tenant
+ */
+export async function getTenantSubscription() {
+  const supabase = await createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: membership } = await supabase
+    .from('tenant_memberships')
+    .select('tenant_id, role, tenants(*)')
+    .eq('user_id', user.id)
+    .single();
+
+  if (!membership) return null;
+
+  const tenantObj = Array.isArray(membership.tenants)
+    ? (membership.tenants[0] as unknown as Tenant)
+    : (membership.tenants as unknown as Tenant);
+
+  const { data: subscription } = await supabase
+    .from('tenant_subscriptions')
+    .select('*')
+    .eq('tenant_id', membership.tenant_id)
+    .single();
 
   return {
-    id: newTenant.id,
-    name: newTenant.name,
-    slug: newTenant.slug,
-    role: "owner",
+    tenant: tenantObj ? { ...tenantObj, role: membership.role || 'STAFF' } : null,
+    subscription,
   };
 }

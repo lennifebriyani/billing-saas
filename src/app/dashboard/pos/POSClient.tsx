@@ -1,269 +1,207 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { CartItem, createPOSTransaction } from "./actions";
+import { useState, useEffect } from 'react';
+import { getActiveProducts, createOrder, CartItem } from './actions';
 
 interface Product {
   id: string;
   name: string;
+  sku: string | null;
   price: number;
-  is_active: boolean;
+  stock: number;
+  type: string;
 }
 
-export default function POSClient({ products }: { products: Product[] }) {
+export default function POSClient() {
+  const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState<"cash" | "manual_transfer">("cash");
-  const [cashAmount, setCashAmount] = useState<string>("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'MANUAL_TRANSFER' | 'QRIS'>('CASH');
+  const [amountPaid, setAmountPaid] = useState<number>(0);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Tambah Produk ke Keranjang (menggunakan `id`, bukan `productId`)
+  const fetchProducts = async () => {
+    setLoading(true);
+    const data = await getActiveProducts();
+    setProducts(data as Product[]);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchProducts();
+  }, []);
+
   const addToCart = (product: Product) => {
     setCart((prev) => {
-      const existing = prev.find((item) => item.id === product.id);
+      const existing = prev.find((item) => item.itemId === product.id);
       if (existing) {
+        if (existing.quantity >= product.stock) {
+          alert('Stok item ini telah mencapai batas maksimum.');
+          return prev;
+        }
         return prev.map((item) =>
-          item.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
-            : item
+          item.itemId === product.id ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
       return [
         ...prev,
-        {
-          id: product.id,
-          name: product.name,
-          price: Number(product.price),
-          quantity: 1,
-        },
+        { itemId: product.id, name: product.name, price: Number(product.price), quantity: 1 },
       ];
     });
   };
 
-  // Ubah Jumlah Item
-  const updateQuantity = (id: string, delta: number) => {
+  const removeFromCart = (itemId: string) => {
+    setCart((prev) => prev.filter((item) => item.itemId !== itemId));
+  };
+
+  const updateQuantity = (itemId: string, qty: number) => {
+    if (qty <= 0) {
+      removeFromCart(itemId);
+      return;
+    }
     setCart((prev) =>
-      prev
-        .map((item) => {
-          if (item.id === id) {
-            const newQty = item.quantity + delta;
-            return newQty > 0 ? { ...item, quantity: newQty } : null;
-          }
-          return item;
-        })
-        .filter(Boolean) as CartItem[]
+      prev.map((item) => (item.itemId === itemId ? { ...item, quantity: qty } : item))
     );
   };
 
-  // Hapus Item dari Keranjang
-  const removeFromCart = (id: string) => {
-    setCart((prev) => prev.filter((item) => item.id !== id));
-  };
+  const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  const totalAmount = cart.reduce(
-    (sum, item) => sum + item.price * item.quantity,
-    0
-  );
-  const numericCash = parseFloat(cashAmount) || 0;
-  const changeAmount = numericCash - totalAmount;
-
-  // Selesaikan Transaksi
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    if (paymentMethod === "cash" && numericCash < totalAmount) {
-      alert("Jumlah uang tunai kurang dari total pembayaran.");
-      return;
-    }
+    setSubmitting(true);
+    setMessage(null);
 
-    setIsLoading(true);
-    setSuccessMessage(null);
+    const paid = amountPaid > 0 ? amountPaid : totalAmount;
 
-    try {
-      // Panggil createPOSTransaction hanya dengan cart
-      await createPOSTransaction(cart);
-      setSuccessMessage("Transaksi Berhasil Disimpan!");
+    const res = await createOrder(cart, paymentMethod, paid);
+
+    if (res.error) {
+      setMessage({ type: 'error', text: res.error });
+    } else {
+      setMessage({ type: 'success', text: 'Transaksi berhasil disimpan!' });
       setCart([]);
-      setCashAmount("");
-    } catch (err: unknown) {
-      const error = err as Error;
-      alert(error.message || "Terjadi kesalahan saat menyimpan transaksi.");
-    } finally {
-      setIsLoading(false);
+      setAmountPaid(0);
+      fetchProducts();
     }
+    setSubmitting(false);
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      {/* Kolom Kiri: Katalog Produk (2 Kolom) */}
+    <div className="p-6 max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Kolom Kiri: Daftar Produk */}
       <div className="lg:col-span-2 space-y-4">
-        <h2 className="text-lg font-bold text-gray-900">Pilih Produk</h2>
+        <h1 className="text-2xl font-bold tracking-tight">Kasir (Point of Sale)</h1>
 
-        {products.length === 0 ? (
-          <div className="bg-white p-8 rounded-xl border border-gray-200 text-center text-gray-500">
-            <p className="text-sm font-medium">Belum ada produk aktif yang tersedia.</p>
-            <p className="text-xs mt-1">Silakan tambahkan produk terlebih dahulu di menu Kelola Produk.</p>
-          </div>
+        {loading ? (
+          <div className="p-8 text-center text-gray-500">Memuat katalog produk...</div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-            {products.map((product) => (
+            {products.map((p) => (
               <button
-                key={product.id}
-                onClick={() => addToCart(product)}
-                className="bg-white p-4 rounded-xl border border-gray-200 hover:border-blue-500 hover:shadow-sm text-left transition flex flex-col justify-between"
+                key={p.id}
+                onClick={() => addToCart(p)}
+                className="p-4 border rounded-lg bg-white shadow-sm hover:border-black text-left flex flex-col justify-between transition"
               >
                 <div>
-                  <p className="font-semibold text-gray-900 text-sm line-clamp-2">
-                    {product.name}
-                  </p>
-                  <p className="text-xs font-bold text-blue-600 mt-2">
-                    Rp {Number(product.price).toLocaleString("id-ID")}
-                  </p>
+                  <div className="font-semibold text-sm line-clamp-2">{p.name}</div>
+                  <div className="text-xs text-gray-400 font-mono">{p.sku || 'No SKU'}</div>
                 </div>
-                <span className="text-[10px] bg-blue-50 text-blue-700 font-medium px-2 py-0.5 rounded mt-3 w-fit">
-                  + Tambah
-                </span>
+                <div className="mt-3 flex justify-between items-center">
+                  <span className="font-bold text-sm">Rp {Number(p.price).toLocaleString('id-ID')}</span>
+                  <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">
+                    Stok: {p.stock}
+                  </span>
+                </div>
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* Kolom Kanan: Rincian Keranjang & Pembayaran */}
-      <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between min-h-[500px]">
-        <div>
-          <h2 className="text-lg font-bold text-gray-900 mb-4">Ringkasan Pesanan</h2>
+      {/* Kolom Kanan: Keranjang & Checkout */}
+      <div className="p-4 border rounded-lg bg-white shadow-sm flex flex-col h-fit space-y-4">
+        <h2 className="text-lg font-bold border-b pb-2">Keranjang Belanja</h2>
 
-          {successMessage && (
-            <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-800 rounded-lg text-xs font-semibold">
-              ✅ {successMessage}
-            </div>
-          )}
+        {message && (
+          <div
+            className={`p-3 text-xs rounded ${
+              message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+            }`}
+          >
+            {message.text}
+          </div>
+        )}
 
-          {cart.length === 0 ? (
-            <div className="text-center py-12 text-gray-400">
-              <div className="text-3xl mb-1">🛒</div>
-              <p className="text-xs">Keranjang masih kosong.</p>
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1">
-              {cart.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between text-xs border-b border-gray-100 pb-2"
-                >
-                  <div className="flex-1 pr-2">
-                    <p className="font-semibold text-gray-900">{item.name}</p>
-                    <p className="text-gray-500">
-                      Rp {item.price.toLocaleString("id-ID")}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => updateQuantity(item.id, -1)}
-                      className="w-6 h-6 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded flex items-center justify-center font-bold"
-                    >
-                      -
-                    </button>
-                    <span className="font-bold text-gray-900 w-4 text-center">
-                      {item.quantity}
-                    </span>
-                    <button
-                      onClick={() => updateQuantity(item.id, 1)}
-                      className="w-6 h-6 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded flex items-center justify-center font-bold"
-                    >
-                      +
-                    </button>
-                    <button
-                      onClick={() => removeFromCart(item.id)}
-                      className="text-red-500 hover:text-red-700 font-bold ml-1"
-                    >
-                      ✕
-                    </button>
+        {cart.length === 0 ? (
+          <div className="py-8 text-center text-xs text-gray-400">Keranjang masih kosong.</div>
+        ) : (
+          <div className="space-y-3 divide-y max-h-80 overflow-y-auto">
+            {cart.map((item) => (
+              <div key={item.itemId} className="pt-2 flex justify-between items-center text-sm">
+                <div>
+                  <div className="font-medium">{item.name}</div>
+                  <div className="text-xs text-gray-500">
+                    Rp {item.price.toLocaleString('id-ID')} x {item.quantity}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Total & Pilihan Pembayaran */}
-        <div className="pt-4 border-t border-gray-200 space-y-4">
-          <div className="flex justify-between items-center">
-            <span className="text-sm font-semibold text-gray-600">Total Tagihan:</span>
-            <span className="text-xl font-extrabold text-gray-900">
-              Rp {totalAmount.toLocaleString("id-ID")}
-            </span>
-          </div>
-
-          {cart.length > 0 && (
-            <>
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Metode Pembayaran
-                </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center space-x-2">
                   <button
-                    type="button"
-                    onClick={() => setPaymentMethod("cash")}
-                    className={`py-2 text-xs font-semibold rounded-lg border transition ${
-                      paymentMethod === "cash"
-                        ? "border-blue-600 bg-blue-50 text-blue-700"
-                        : "border-gray-200 text-gray-600 hover:bg-gray-50"
-                    }`}
+                    onClick={() => updateQuantity(item.itemId, item.quantity - 1)}
+                    className="w-6 h-6 border rounded bg-gray-50 flex items-center justify-center font-bold"
                   >
-                    💵 Tunai (Cash)
+                    -
                   </button>
+                  <span className="text-xs font-semibold">{item.quantity}</span>
                   <button
-                    type="button"
-                    onClick={() => setPaymentMethod("manual_transfer")}
-                    className={`py-2 text-xs font-semibold rounded-lg border transition ${
-                      paymentMethod === "manual_transfer"
-                        ? "border-blue-600 bg-blue-50 text-blue-700"
-                        : "border-gray-200 text-gray-600 hover:bg-gray-50"
-                    }`}
+                    onClick={() => updateQuantity(item.itemId, item.quantity + 1)}
+                    className="w-6 h-6 border rounded bg-gray-50 flex items-center justify-center font-bold"
                   >
-                    🏦 Transfer Manual
+                    +
                   </button>
                 </div>
               </div>
+            ))}
+          </div>
+        )}
 
-              {paymentMethod === "cash" && (
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Uang Diterima (Rp)
-                  </label>
-                  <input
-                    type="number"
-                    value={cashAmount}
-                    onChange={(e) => setCashAmount(e.target.value)}
-                    placeholder="Masukkan jumlah uang"
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  {numericCash > 0 && (
-                    <p
-                      className={`text-xs font-semibold mt-1 ${
-                        changeAmount >= 0 ? "text-green-600" : "text-red-500"
-                      }`}
-                    >
-                      {changeAmount >= 0
-                        ? `Kembalian: Rp ${changeAmount.toLocaleString("id-ID")}`
-                        : `Kurang: Rp ${Math.abs(changeAmount).toLocaleString("id-ID")}`}
-                    </p>
-                  )}
-                </div>
-              )}
+        <div className="border-t pt-4 space-y-3">
+          <div className="flex justify-between font-bold text-base">
+            <span>Total:</span>
+            <span>Rp {totalAmount.toLocaleString('id-ID')}</span>
+          </div>
 
-              <button
-                type="button"
-                onClick={handleCheckout}
-                disabled={isLoading}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg text-sm transition shadow-sm disabled:opacity-50"
-              >
-                {isLoading ? "Memproses..." : "Selesaikan & Bayar"}
-              </button>
-            </>
-          )}
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">Metode Pembayaran</label>
+            <select
+              value={paymentMethod}
+              onChange={(e) => setPaymentMethod(e.target.value as 'CASH' | 'MANUAL_TRANSFER' | 'QRIS')}
+              className="w-full p-2 border rounded text-xs"
+            >
+              <option value="CASH">CASH (Tunai)</option>
+              <option value="QRIS">QRIS</option>
+              <option value="MANUAL_TRANSFER">Transfer Bank</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">Nominal Bayar (Rp)</label>
+            <input
+              type="number"
+              placeholder={`Default: ${totalAmount}`}
+              value={amountPaid || ''}
+              onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
+              className="w-full p-2 border rounded text-xs"
+            />
+          </div>
+
+          <button
+            onClick={handleCheckout}
+            disabled={submitting || cart.length === 0}
+            className="w-full py-2 bg-black text-white text-sm font-semibold rounded hover:bg-gray-800 disabled:bg-gray-300 transition"
+          >
+            {submitting ? 'Proses...' : 'Bayar Sekarang'}
+          </button>
         </div>
       </div>
     </div>

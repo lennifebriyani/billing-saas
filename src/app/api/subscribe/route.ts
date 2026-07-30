@@ -2,45 +2,26 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/lib/tenant";
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
     const supabase = await createClient();
-
-    // 1. Cek User Logged In
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { message: "Sesi login berakhir. Silakan login kembali." },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // 2. Cek Tenant
     const tenant = await getCurrentTenant();
     if (!tenant) {
-      return NextResponse.json(
-        { message: "Data toko/tenant tidak ditemukan." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Tenant not found" }, { status: 404 });
     }
 
-    // 3. Ambil Key & Status Production dari .env.local
-    const serverKey = process.env.MIDTRANS_SERVER_KEY?.trim();
-    const isProduction =
-      process.env.MIDTRANS_IS_PRODUCTION === "true" ||
-      process.env.NEXT_PUBLIC_MIDTRANS_IS_PRODUCTION === "true";
+    const body = await req.json().catch(() => ({}));
+    const planId = body.planId || "PLUS";
+    const grossAmount = planId === "PLUS" ? 299000 : 149000;
 
-    if (!serverKey) {
-      return NextResponse.json(
-        { message: "MIDTRANS_SERVER_KEY belum dikonfigurasi." },
-        { status: 500 }
-      );
-    }
-
-    // 4. Penentuan Endpoint URL berdasarkan mode (Sandbox vs Production)
+    const serverKey = process.env.MIDTRANS_SERVER_KEY || "";
+    const isProduction = process.env.NODE_ENV === "production";
     const midtransUrl = isProduction
       ? "https://app.midtrans.com/snap/v1/transactions"
       : "https://app.sandbox.midtrans.com/snap/v1/transactions";
@@ -48,40 +29,43 @@ export async function POST() {
     const authHeader = Buffer.from(`${serverKey}:`).toString("base64");
     const orderId = `SUB-${tenant.id.slice(0, 8)}-${Date.now()}`;
 
-    // 5. Request Token ke Midtrans
+    const payload = {
+      transaction_details: {
+        order_id: orderId,
+        gross_amount: grossAmount,
+      },
+      customer_details: {
+        first_name: user.email?.split("@")[0] || "Customer",
+        email: user.email,
+      },
+      item_details: [
+        {
+          id: planId,
+          price: grossAmount,
+          quantity: 1,
+          name: `Subscription SaaS Plan ${planId}`,
+        },
+      ],
+    };
+
     const response = await fetch(midtransUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Basic ${authHeader}`,
       },
-      body: JSON.stringify({
-        transaction_details: {
-          order_id: orderId,
-          gross_amount: 150000, // Nominal pembayaran
-        },
-        customer_details: {
-          first_name: tenant.name,
-          email: user.email,
-        },
-      }),
+      body: JSON.stringify(payload),
     });
 
-    const midtransData = await response.json();
+    const data = await response.json();
 
-    if (!response.ok || !midtransData.token) {
-      const errorMsg =
-        midtransData.error_messages?.join(", ") ||
-        midtransData.message ||
-        "Gagal mendapatkan token transaksi dari Midtrans.";
-      return NextResponse.json({ message: errorMsg }, { status: 400 });
+    if (!response.ok) {
+      return NextResponse.json({ error: data.error_messages || "Midtrans error" }, { status: 400 });
     }
 
-    return NextResponse.json({ token: midtransData.token });
-  } catch (error: any) {
-    return NextResponse.json(
-      { message: error.message || "Terjadi kesalahan server internal" },
-      { status: 500 }
-    );
+    return NextResponse.json({ token: data.token, redirect_url: data.redirect_url, orderId });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Internal Error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

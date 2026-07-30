@@ -1,82 +1,96 @@
-import { createClient } from "@/lib/supabase/server";
-import { getCurrentTenant } from "@/lib/tenant";
+import { createClient } from '@/lib/supabase/server';
 
 export default async function OrdersPage() {
   const supabase = await createClient();
-  const tenant = await getCurrentTenant();
 
-  if (!tenant) return <div className="p-6">Tenant tidak ditemukan.</div>;
-
-  // Ambil transaksi beserta detail itemnya
-  const { data: orders } = await supabase
-    .from("orders")
+  const { data: transactions, error } = await supabase
+    .from('transactions')
     .select(`
       id,
-      total_amount,
+      transaction_number,
+      total,
       status,
+      payment_status,
       created_at,
-      order_items (
+      customers ( name ),
+      transaction_items (
         id,
-        product_name,
-        price,
+        item_name,
+        unit_price,
         quantity,
         subtotal
       )
     `)
-    .eq("tenant_id", tenant.id)
-    .order("created_at", { ascending: false });
+    .order('created_at', { ascending: false });
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Riwayat Transaksi</h1>
-        <p className="text-sm text-gray-500">Daftar seluruh penjualan dari Kasir POS.</p>
+        <h1 className="text-2xl font-bold tracking-tight">Riwayat Transaksi (Orders)</h1>
+        <p className="text-sm text-gray-500">Daftar seluruh transaksi kasir dan status pembayaran tenant.</p>
       </div>
 
-      {!orders || orders.length === 0 ? (
-        <div className="p-12 text-center text-gray-500 bg-white border rounded-xl">
-          Belum ada transaksi tersimpan.
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {orders.map((order) => (
-            <div key={order.id} className="p-5 bg-white border border-gray-200 rounded-xl shadow-sm space-y-3">
-              <div className="flex flex-wrap justify-between items-center border-b pb-3 gap-2">
-                <div>
-                  <p className="text-xs text-gray-400 font-mono">ID: {order.id}</p>
-                  <p className="text-xs text-gray-500">
-                    {new Date(order.created_at).toLocaleString("id-ID", {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    })}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <span className="inline-block px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800 uppercase">
-                    {order.status}
+      <div className="border rounded-lg bg-white shadow-sm overflow-hidden">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-gray-50 border-b">
+            <tr>
+              <th className="p-3 font-semibold">No. Transaksi</th>
+              <th className="p-3 font-semibold">Pelanggan</th>
+              <th className="p-3 font-semibold">Detail Item</th>
+              <th className="p-3 font-semibold">Total</th>
+              <th className="p-3 font-semibold">Status Bayar</th>
+              <th className="p-3 font-semibold">Waktu</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {error && (
+              <tr>
+                <td colSpan={6} className="p-4 text-center text-red-500">
+                  Gagal memuat riwayat transaksi: {error.message}
+                </td>
+              </tr>
+            )}
+            {transactions && transactions.length === 0 && (
+              <tr>
+                <td colSpan={6} className="p-4 text-center text-gray-500">
+                  Belum ada riwayat transaksi yang tercatat.
+                </td>
+              </tr>
+            )}
+            {transactions?.map((tx) => (
+              <tr key={tx.id} className="hover:bg-gray-50">
+                <td className="p-3 font-mono font-medium text-xs text-blue-600">{tx.transaction_number}</td>
+                <td className="p-3">
+                  {/* @ts-expect-error customer relation type handle */}
+                  {tx.customers?.name || 'Umum / Non-Member'}
+                </td>
+                <td className="p-3 text-xs">
+                  {tx.transaction_items?.map((item: { id: string; item_name: string; quantity: number }) => (
+                    <div key={item.id}>
+                      {item.item_name} x {item.quantity}
+                    </div>
+                  ))}
+                </td>
+                <td className="p-3 font-semibold">Rp {Number(tx.total).toLocaleString('id-ID')}</td>
+                <td className="p-3">
+                  <span
+                    className={`px-2 py-1 text-xs rounded font-medium ${
+                      tx.payment_status === 'PAID'
+                        ? 'bg-green-100 text-green-800'
+                        : 'bg-yellow-100 text-yellow-800'
+                    }`}
+                  >
+                    {tx.payment_status}
                   </span>
-                  <p className="text-lg font-bold text-indigo-600 mt-1">
-                    Rp {Number(order.total_amount).toLocaleString("id-ID")}
-                  </p>
-                </div>
-              </div>
-
-              {/* Detail Items */}
-              <div className="bg-gray-50 p-3 rounded-lg space-y-1.5">
-                <p className="text-xs font-semibold text-gray-600">Item Dibeli:</p>
-                {order.order_items?.map((item: any) => (
-                  <div key={item.id} className="flex justify-between text-xs text-gray-700">
-                    <span>
-                      {item.product_name} x{item.quantity}
-                    </span>
-                    <span>Rp {Number(item.subtotal).toLocaleString("id-ID")}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+                </td>
+                <td className="p-3 text-xs text-gray-500">
+                  {new Date(tx.created_at).toLocaleString('id-ID')}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
