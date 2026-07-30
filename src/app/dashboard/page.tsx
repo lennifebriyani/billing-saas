@@ -1,136 +1,175 @@
-import { createClient } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
-
-export const revalidate = 0;
+import { createClient } from '@/lib/supabase/server'
+import Link from 'next/link'
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // 1. Ambil Profil & Tenant ID
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('tenant_id, role, tenants(name)')
+    .eq('id', user?.id || '')
+    .maybeSingle()
 
-  if (!user) {
-    redirect('/login');
+  const tenantId = profile?.tenant_id
+  const tenant = profile?.tenants as unknown as { name: string } | null
+
+  // State Agregat Data Real-time
+  let totalRevenue = 0
+  let paidCount = 0
+  let unpaidCount = 0
+  let customerCount = 0
+  let recentInvoices: any[] = []
+
+  if (tenantId) {
+    // 2. Hitung Total Pelanggan
+    const { count } = await supabase
+      .from('customers')
+      .select('*', { count: 'exact', head: true })
+
+    customerCount = count || 0
+
+    // 3. Ambil Data Invoices untuk Kalkulasi Metrik & Aktivitas Terbaru
+    const { data: invoices } = await supabase
+      .from('invoices')
+      .select('*, customers(name)')
+      .order('created_at', { ascending: false })
+
+    if (invoices) {
+      recentInvoices = invoices.slice(0, 5) // Ambil 5 teratas
+      
+      invoices.forEach((inv) => {
+        if (inv.status === 'paid') {
+          totalRevenue += Number(inv.amount || 0)
+          paidCount++
+        } else if (inv.status === 'unpaid') {
+          unpaidCount++
+        }
+      })
+    }
   }
-
-  // 1. Ambil Tenant ID milik user
-  const { data: membership } = await supabase
-    .from('tenant_memberships')
-    .select('tenant_id, role')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!membership) {
-    redirect('/onboarding');
-  }
-
-  const tenantId = membership.tenant_id;
-
-  // 2. Query Data Transaksi
-  const { data: transactions } = await supabase
-    .from('transactions')
-    .select('id, total_amount, payment_status, payment_method, created_at')
-    .eq('tenant_id', tenantId);
-
-  // 3. Query Stok Menipis (Stok < 5)
-  const { data: lowStockItems } = await supabase
-    .from('catalog_items')
-    .select('id, name, stock')
-    .eq('tenant_id', tenantId)
-    .lt('stock', 5);
-
-  const totalTransactions = transactions?.length || 0;
-  const totalRevenue =
-    transactions
-      ?.filter((t) => t.payment_status === 'PAID')
-      .reduce((sum, t) => sum + Number(t.total_amount), 0) || 0;
-
-  const cashSales =
-    transactions
-      ?.filter((t) => t.payment_method === 'CASH' && t.payment_status === 'PAID')
-      .reduce((sum, t) => sum + Number(t.total_amount), 0) || 0;
-
-  const qrisSales =
-    transactions
-      ?.filter((t) => t.payment_method === 'QRIS' && t.payment_status === 'PAID')
-      .reduce((sum, t) => sum + Number(t.total_amount), 0) || 0;
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex justify-between items-center border-b pb-4">
+    <div className="space-y-8">
+      {/* Welcome Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard Ringkasan</h1>
-          <p className="text-sm text-gray-500">
-            Role Anda: <span className="font-semibold text-black">{membership.role}</span>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Ringkasan Toko
+          </h1>
+          <p className="text-slate-500 text-sm mt-0.5">
+            Pantau kinerja keuangan & billing untuk toko <span className="font-semibold text-slate-800">{tenant?.name || 'Utama'}</span>
           </p>
         </div>
-        <div className="flex gap-2">
-          <Link
-            href="/dashboard/pos"
-            className="px-4 py-2 bg-black text-white text-sm font-semibold rounded hover:bg-gray-800 transition"
+        <div>
+          <Link 
+            href="/dashboard/invoices"
+            className="inline-block px-4 py-2.5 bg-black text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition-colors shadow-sm"
           >
-            Buka Kasir (POS)
+            + Buat Tagihan Baru
           </Link>
-          {membership.role === 'OWNER' && (
-            <Link
-              href="/dashboard/team"
-              className="px-4 py-2 border text-sm font-semibold rounded hover:bg-gray-50 transition"
-            >
-              Kelola Tim
-            </Link>
-          )}
         </div>
       </div>
 
-      {/* Kartu Statistik Utama */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-5 border rounded-lg bg-white shadow-sm space-y-1">
-          <div className="text-xs text-gray-500 uppercase tracking-wider">Total Omset (Lunas)</div>
-          <div className="text-2xl font-bold">Rp {totalRevenue.toLocaleString('id-ID')}</div>
-        </div>
-
-        <div className="p-5 border rounded-lg bg-white shadow-sm space-y-1">
-          <div className="text-xs text-gray-500 uppercase tracking-wider">Total Transaksi</div>
-          <div className="text-2xl font-bold">{totalTransactions}</div>
-        </div>
-
-        <div className="p-5 border rounded-lg bg-white shadow-sm space-y-1">
-          <div className="text-xs text-gray-500 uppercase tracking-wider">Pembayaran CASH</div>
-          <div className="text-2xl font-bold text-green-700">
-            Rp {cashSales.toLocaleString('id-ID')}
+      {/* Metric Cards Real-time */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider">Total Pendapatan</span>
+            <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded text-xs font-bold">Rp</span>
           </div>
+          <p className="text-2xl font-bold text-slate-900">
+            Rp {totalRevenue.toLocaleString('id-ID')}
+          </p>
+          <p className="text-xs text-slate-400 mt-1">Status tagihan lunas</p>
         </div>
 
-        <div className="p-5 border rounded-lg bg-white shadow-sm space-y-1">
-          <div className="text-xs text-gray-500 uppercase tracking-wider">Pembayaran QRIS</div>
-          <div className="text-2xl font-bold text-blue-700">
-            Rp {qrisSales.toLocaleString('id-ID')}
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider">Tagihan Lunas</span>
+            <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded text-xs font-bold">✓</span>
           </div>
+          <p className="text-2xl font-bold text-slate-900">{paidCount}</p>
+          <p className="text-xs text-slate-400 mt-1">Invoice terbayar</p>
+        </div>
+
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider">Menunggu Bayar</span>
+            <span className="px-2 py-0.5 bg-amber-50 text-amber-600 rounded text-xs font-bold">!</span>
+          </div>
+          <p className="text-2xl font-bold text-slate-900">{unpaidCount}</p>
+          <p className="text-xs text-slate-400 mt-1">Belum dilunasi</p>
+        </div>
+
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider">Total Pelanggan</span>
+            <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded text-xs font-bold">👥</span>
+          </div>
+          <p className="text-2xl font-bold text-slate-900">{customerCount}</p>
+          <p className="text-xs text-slate-400 mt-1">Pelanggan terdaftar</p>
         </div>
       </div>
 
-      {/* Peringatan Stok Menipis (Low Stock Alert) */}
-      <div className="p-5 border rounded-lg bg-white shadow-sm space-y-3">
-        <h2 className="text-base font-bold text-red-600 flex items-center gap-2">
-          <span>⚠️</span> Peringatan Stok Menipis (&lt; 5 pcs)
-        </h2>
-        {lowStockItems && lowStockItems.length > 0 ? (
-          <div className="divide-y border-t pt-2">
-            {lowStockItems.map((item) => (
-              <div key={item.id} className="py-2 flex justify-between text-sm">
-                <span className="font-medium">{item.name}</span>
-                <span className="text-xs font-bold text-red-600 bg-red-50 px-2.5 py-1 rounded">
-                  Sisa: {item.stock}
-                </span>
-              </div>
-            ))}
+      {/* Recent Activity Table */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-slate-900 text-base">Tagihan Terbaru</h3>
+            <p className="text-xs text-slate-500">5 transaksi invoice terakhir</p>
+          </div>
+          <Link href="/dashboard/invoices" className="text-xs font-semibold text-indigo-600 hover:text-indigo-800">
+            Lihat Semua →
+          </Link>
+        </div>
+        
+        {recentInvoices.length === 0 ? (
+          <div className="p-12 text-center">
+            <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto mb-3 text-lg">
+              🧾
+            </div>
+            <h4 className="text-slate-700 font-semibold text-sm">Belum ada transaksi invoice</h4>
+            <p className="text-slate-400 text-xs mt-1 max-w-sm mx-auto">
+              Invoice yang dibuat akan muncul di sini dan otomatis memperbarui statistik toko.
+            </p>
           </div>
         ) : (
-          <p className="text-xs text-gray-500">Semua stok produk masih aman.</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                  <th className="p-4">No. Invoice</th>
+                  <th className="p-4">Pelanggan</th>
+                  <th className="p-4">Total</th>
+                  <th className="p-4">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
+                {recentInvoices.map((inv) => (
+                  <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="p-4 font-mono font-bold text-slate-900">{inv.invoice_number}</td>
+                    <td className="p-4 text-slate-800">{inv.customers?.name || 'Pelanggan Umum'}</td>
+                    <td className="p-4 font-bold text-slate-900">
+                      Rp {Number(inv.amount).toLocaleString('id-ID')}
+                    </td>
+                    <td className="p-4">
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold capitalize ${
+                        inv.status === 'paid' 
+                          ? 'bg-emerald-100 text-emerald-800' 
+                          : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {inv.status === 'paid' ? 'Lunas' : 'Belum Bayar'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
-  );
+  )
 }
