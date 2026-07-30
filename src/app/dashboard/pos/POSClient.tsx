@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { getActiveProducts, createOrder, CartItem } from './actions';
+import ReceiptModal from './ReceiptModal'; // Import ReceiptModal
 
 interface Product {
   id: string;
@@ -15,11 +16,13 @@ interface Product {
 export default function POSClient() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [lastCart, setLastCart] = useState<CartItem[]>([]); // Menyimpan snapshot keranjang terakhir untuk cetak struk
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'MANUAL_TRANSFER' | 'QRIS'>('CASH');
   const [amountPaid, setAmountPaid] = useState<number>(0);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [showReceipt, setShowReceipt] = useState(false); // State kontrol modal struk
 
   const fetchProducts = async () => {
     setLoading(true);
@@ -80,6 +83,8 @@ export default function POSClient() {
       setMessage({ type: 'error', text: res.error });
     } else {
       setMessage({ type: 'success', text: 'Transaksi berhasil disimpan!' });
+      setLastCart([...cart]); // Simpan copy isi keranjang untuk struk
+      setShowReceipt(true);   // Buka modal cetak struk
       setCart([]);
       setAmountPaid(0);
       fetchProducts();
@@ -204,6 +209,16 @@ export default function POSClient() {
           </button>
         </div>
       </div>
+
+      {/* Render Modal Struk Belanja */}
+      <ReceiptModal
+        isOpen={showReceipt}
+        onClose={() => setShowReceipt(false)}
+        cart={lastCart}
+        totalAmount={lastCart.reduce((s, i) => s + i.price * i.quantity, 0)}
+        amountPaid={amountPaid}
+        paymentMethod={paymentMethod}
+      />
     </div>
   );
 }
