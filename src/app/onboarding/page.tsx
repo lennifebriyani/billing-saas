@@ -1,120 +1,79 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
 export default function OnboardingPage() {
-  const [storeName, setStoreName] = useState('')
+  const [name, setName] = useState('')
   const [loading, setLoading] = useState(false)
-  const [errorMessage, setErrorMessage] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
   const supabase = createClient()
 
-  const slugify = (text: string) => {
-    const cleanText = text
-      .toLowerCase()
-      .trim()
-      .replace(/[^\w\s-]/g, '')
-      .replace(/[\s_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-    const uniqueId = Math.random().toString(36).substring(2, 6)
-    return `${cleanText || 'toko'}-${uniqueId}`
-  }
-
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!storeName.trim()) return
-
     setLoading(true)
-    setErrorMessage('')
+    setError(null)
 
     try {
-      // 1. Cek User
-      const { data: { user }, error: userError } = await supabase.auth.getUser()
+      // Panggil 1 RPC ini, PostgreSQL yang akan urus Buat Toko + Owner + Update Profile
+      const { data: tenantId, error: rpcError } = await supabase.rpc('create_tenant_onboarding', {
+        tenant_name: name,
+      })
 
-      if (userError || !user) {
-        setErrorMessage('Sesi login tidak ditemukan. Silakan login ulang.')
-        setLoading(false)
-        return
+      if (rpcError) {
+        throw new Error(rpcError.message)
       }
 
-      // 2. Buat slug toko
-      const generatedSlug = slugify(storeName)
-
-      // 3. Simpan ke tabel tenants
-      const { data: tenant, error: insertError } = await supabase
-        .from('tenants')
-        .insert([{ name: storeName.trim(), slug: generatedSlug }])
-        .select()
-        .single()
-
-      if (insertError) throw new Error(`Gagal membuat toko: ${insertError.message}`)
-
-      // 4. Update tabel profiles
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert(
-          { 
-            id: user.id,
-            tenant_id: tenant.id, 
-            role: 'owner'
-          }, 
-          { onConflict: 'id' }
-        )
-
-      if (profileError) throw new Error(`Gagal menghubungkan profil: ${profileError.message}`)
-
-      // 5. Force reload penuh ke /dashboard (memaksa server membaca session & data baru)
-      window.location.href = '/dashboard'
-
-    } catch (error: any) {
-      console.error('Onboarding Error:', error)
-      setErrorMessage(error.message || 'Terjadi kesalahan sistem.')
+      // Berhasil! Langsung tembus ke dashboard
+      router.push('/dashboard')
+      router.refresh()
+    } catch (err: any) {
+      console.error('Onboarding Error:', err)
+      setError(err.message || 'Terjadi kesalahan saat membuat toko.')
+    } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-      <div className="w-full max-w-md bg-white rounded-xl shadow-md p-8 border border-slate-100">
-        <h1 className="text-2xl font-bold text-slate-900 mb-2">
-          Setup Toko Baru
-        </h1>
-        <p className="text-slate-600 mb-6 text-sm">
-          Masukkan nama toko atau perusahaan kamu untuk melanjutkan.
-        </p>
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
+      <div className="w-full max-w-md space-y-6 rounded-2xl bg-white p-8 shadow-sm border border-gray-100">
+        <div className="text-center space-y-2">
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900">Setup Toko Baru</h1>
+          <p className="text-sm text-gray-600">
+            Masukkan nama toko atau perusahaan kamu untuk melanjutkan.
+          </p>
+        </div>
 
-        {errorMessage && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-sm break-words">
-            ⚠️ {errorMessage}
+        {error && (
+          <div className="rounded-xl bg-red-50 p-4 text-sm text-red-600 border border-red-100">
+            ⚠️ {error}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label 
-              htmlFor="storeName" 
-              className="block text-sm font-medium text-slate-700 mb-1"
-            >
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">
               Nama Toko / Perusahaan
             </label>
             <input
-              id="storeName"
               type="text"
-              value={storeName}
-              onChange={(e) => setStoreName(e.target.value)}
-              placeholder="Contoh: Toko Sembako Mak Lambok"
-              className="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-black transition-all"
               required
-              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Contoh: PS 5 LAMBOK"
+              className="w-full rounded-xl border border-gray-300 px-4 py-3 text-gray-900 focus:border-black focus:outline-none focus:ring-1 focus:ring-black text-sm"
             />
           </div>
 
           <button
             type="submit"
-            disabled={loading || !storeName.trim()}
-            className="w-full py-3 bg-black text-white rounded-lg font-medium hover:bg-slate-800 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+            disabled={loading}
+            className="w-full rounded-xl bg-black py-3.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 transition-all shadow-sm"
           >
-            {loading ? 'Memproses & Menyimpan...' : 'Buat Toko & Lanjutkan'}
+            {loading ? 'Memproses...' : 'Buat Toko & Lanjutkan'}
           </button>
         </form>
       </div>

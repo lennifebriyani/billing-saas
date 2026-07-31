@@ -1,57 +1,95 @@
-'use server';
+'use server'
 
-import { createClient } from '@/lib/supabase/server';
-import { revalidatePath } from 'next/cache';
+import { revalidatePath } from 'next/cache'
+import { createClient } from '@/lib/supabase/server'
+import { getCurrentTenant } from '@/lib/tenant'
 
-export async function createCatalogItem(formData: FormData): Promise<void> {
-  const supabase = await createClient();
+// 1. Fetch Produk berdasarkan Tenant Aktif
+export async function getProducts() {
+  const supabase = await createClient()
+  const tenant = await getCurrentTenant()
 
-  const name = formData.get('name') as string;
-  const sku = formData.get('sku') as string;
-  const price = parseFloat(formData.get('price') as string);
-  const stock = parseInt(formData.get('stock') as string, 10);
-  const type = (formData.get('type') as string) || 'PRODUCT';
+  if (!tenant) return []
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return;
-
-  const { data: membership } = await supabase
-    .from('tenant_memberships')
-    .select('tenant_id')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!membership) return;
-
-  const { error } = await supabase.from('catalog_items').insert({
-    tenant_id: membership.tenant_id,
-    name,
-    sku: sku || null,
-    price,
-    stock,
-    type,
-  });
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .eq('tenant_id', tenant.id)
+    .order('created_at', { ascending: false })
 
   if (error) {
-    console.error('Create Catalog Item Error:', error.message);
-    return;
+    console.error('Error fetching products:', error.message)
+    return []
   }
 
-  revalidatePath('/dashboard/products');
+  return data
 }
 
-export async function deleteCatalogItem(id: string): Promise<void> {
-  const supabase = await createClient();
+// 2. Tambah Produk Baru (Untuk panggilan kustom/Client Component)
+export async function createProduct(formData: FormData) {
+  const supabase = await createClient()
+  const tenant = await getCurrentTenant()
 
-  const { error } = await supabase
-    .from('catalog_items')
-    .delete()
-    .eq('id', id);
-
-  if (error) {
-    console.error('Delete Catalog Item Error:', error.message);
-    return;
+  if (!tenant) {
+    return { error: 'Tenant tidak ditemukan atau session telah berakhir.' }
   }
 
-  revalidatePath('/dashboard/products');
+  const name = formData.get('name') as string
+  const price = parseFloat(formData.get('price') as string) || 0
+  const stock = parseInt(formData.get('stock') as string, 10) || 0
+  const sku = (formData.get('sku') as string) || null
+
+  if (!name || price <= 0) {
+    return { error: 'Nama produk dan harga valid wajib diisi.' }
+  }
+
+  const { data, error } = await supabase
+    .from('products')
+    .insert({
+      tenant_id: tenant.id,
+      name,
+      price,
+      stock,
+      sku,
+    })
+    .select()
+    .single()
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath('/dashboard/products')
+  revalidatePath('/dashboard/pos')
+  return { success: true, data }
+}
+
+// 3. Server Action khusus untuk <form action={createCatalogItem}>
+// Return type diset eksplisit ke Promise<void> untuk memenuhi standar JSX Form
+export async function createCatalogItem(formData: FormData): Promise<void> {
+  await createProduct(formData)
+}
+
+// 4. Hapus Produk
+export async function deleteCatalogItem(id: string) {
+  const supabase = await createClient()
+  const tenant = await getCurrentTenant()
+
+  if (!tenant) {
+    return { error: 'Tenant tidak ditemukan.' }
+  }
+
+  const { error } = await supabase
+    .from('products')
+    .delete()
+    .eq('id', id)
+    .eq('tenant_id', tenant.id)
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath('/dashboard/products')
+  revalidatePath('/dashboard/pos')
+  return { success: true }
 }

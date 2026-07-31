@@ -1,200 +1,89 @@
 'use server'
 
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
-import { getClaims } from '@/lib/auth'
-import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { getCurrentTenant } from '@/lib/tenant'
 
-export async function addProduct(formData: FormData) {
-  const { tenantId } = await getClaims()
+export interface DashboardStats {
+  totalRevenue: number
+  totalOrders: number
+  totalProducts: number
+  lowStockCount: number
+}
 
-  if (!tenantId) {
-    throw new Error('Unauthorized: Tenant ID tidak ditemukan!')
-  }
+export interface RecentOrder {
+  id: string
+  total_amount: number
+  payment_method: string
+  status: string
+  created_at: string
+}
 
-  const name = formData.get('name') as string
-  const price = Number(formData.get('price'))
+// 1. Fetch Ringkasan Statistik Utama
+export async function getDashboardStats(): Promise<DashboardStats> {
+  const supabase = await createClient()
+  const tenant = await getCurrentTenant()
 
-  if (!name || isNaN(price)) {
-    return
-  }
-
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {}
-        },
-      },
+  if (!tenant) {
+    return {
+      totalRevenue: 0,
+      totalOrders: 0,
+      totalProducts: 0,
+      lowStockCount: 0,
     }
-  )
+  }
 
-  // 1. Cek jumlah produk aktif tenant saat ini
-  const { count, error: countError } = await supabase
+  // Fetch Pesanan untuk Total Revenue & Total Orders
+  const { data: orders, error: ordersError } = await supabase
+    .from('orders')
+    .select('total_amount')
+    .eq('tenant_id', tenant.id)
+
+  const totalOrders = orders ? orders.length : 0
+  const totalRevenue = orders ? orders.reduce((sum, order) => sum + (order.total_amount || 0), 0) : 0
+
+  if (ordersError) {
+    console.error('Error fetching order stats:', ordersError.message)
+  }
+
+  // Fetch Produk untuk Total Products & Stok Tipis (<= 5)
+  const { data: products, error: productsError } = await supabase
     .from('products')
-    .select('*', { count: 'exact', head: true })
+    .select('id, stock')
+    .eq('tenant_id', tenant.id)
 
-  if (countError) {
-    console.error('Gagal menghitung produk:', countError.message)
-    return
+  const totalProducts = products ? products.length : 0
+  const lowStockCount = products ? products.filter((p) => p.stock <= 5).length : 0
+
+  if (productsError) {
+    console.error('Error fetching product stats:', productsError.message)
   }
 
-  // 2. Feature Gating: Batas Kuota Paket Free = 3 Produk
-  const MAX_FREE_PRODUCTS = 3
-
-  if (count !== null && count >= MAX_FREE_PRODUCTS) {
-    // Redirect ke dashboard dengan status error limit
-    redirect('/dashboard?error=limit_reached')
+  return {
+    totalRevenue,
+    totalOrders,
+    totalProducts,
+    lowStockCount,
   }
-
-  // 3. Insert Produk Baru jika kuota masih aman
-  const { error } = await supabase.from('products').insert({
-    tenant_id: tenantId,
-    name,
-    price,
-  })
-
-  if (error) {
-    console.error('Gagal menambah produk:', error.message)
-    return
-  }
-
-  revalidatePath('/dashboard')
-  redirect('/dashboard')
 }
 
-export async function deleteProduct(formData: FormData) {
-  const { tenantId } = await getClaims()
+// 2. Fetch 5 Transaksi Terakhir
+export async function getRecentOrders(): Promise<RecentOrder[]> {
+  const supabase = await createClient()
+  const tenant = await getCurrentTenant()
 
-  if (!tenantId) {
-    throw new Error('Unauthorized!')
-  }
+  if (!tenant) return []
 
-  const productId = formData.get('id') as string
-
-  if (!productId) return
-
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {}
-        },
-      },
-    }
-  )
-
-  const { error } = await supabase
-    .from('products')
-    .delete()
-    .eq('id', productId)
+  const { data, error } = await supabase
+    .from('orders')
+    .select('id, total_amount, payment_method, status, created_at')
+    .eq('tenant_id', tenant.id)
+    .order('created_at', { ascending: false })
+    .limit(5)
 
   if (error) {
-    console.error('Gagal menghapus produk:', error.message)
-    return
+    console.error('Error fetching recent orders:', error.message)
+    return []
   }
 
-  revalidatePath('/dashboard')
-  redirect('/dashboard')
-}
-
-// Tambahkan fungsi ini di baris paling bawah src/app/dashboard/actions.ts
-
-export async function inviteMember(formData: FormData) {
-  const email = formData.get('email') as string
-  const role = (formData.get('role') as string) || 'member'
-
-  if (!email) return
-
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {}
-        },
-      },
-    }
-  )
-
-  // Panggil RPC Function yang sudah kita buat di Supabase
-  const { error } = await supabase.rpc('invite_tenant_member', {
-    user_email: email,
-    new_role: role,
-  })
-
-  if (error) {
-    console.error('Gagal mengundang member:', error.message)
-    redirect(`/dashboard?error=${encodeURIComponent(error.message)}`)
-  }
-
-  revalidatePath('/dashboard')
-  redirect('/dashboard?success=member_invited')
-}
-
-// Tambahkan di bagian bawah src/app/dashboard/actions.ts
-
-export async function upgradePlan() {
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {}
-        },
-      },
-    }
-  )
-
-  // Panggil RPC Function upgrade_tenant_plan
-  const { error } = await supabase.rpc('upgrade_tenant_plan', {
-    new_plan: 'pro',
-  })
-
-  if (error) {
-    console.error('Gagal upgrade plan:', error.message)
-    redirect(`/dashboard?error=${encodeURIComponent(error.message)}`)
-  }
-
-  revalidatePath('/dashboard')
-  redirect('/dashboard?success=upgraded')
+  return data || []
 }

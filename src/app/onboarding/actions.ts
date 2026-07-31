@@ -1,44 +1,65 @@
-'use server';
+'use server'
 
-import { createClient } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
 
-export async function createTenantOnboarding(formData: FormData): Promise<void> {
-  const supabase = await createClient();
+export async function createTenant(formData: FormData) {
+  const supabase = await createClient()
 
-  const name = formData.get('name') as string;
-  const slug = name
+  // 1. Verifikasi User yang sedang login
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+
+  if (authError || !user) {
+    redirect('/login')
+  }
+
+  const name = formData.get('name') as string
+  const rawSlug = formData.get('slug') as string
+  
+  // Format slug otomatis jika tidak diisi manual
+  const slug = (rawSlug || name)
     .toLowerCase()
-    .replace(/[^a-z0-9]/g, '-')
+    .trim()
+    .replace(/[^a-z0-9 -]/g, '')
+    .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
-    .trim();
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect('/login');
+  if (!name) {
+    return redirect('/onboarding?error=Nama%20bisnis/toko%20harus%20diisi')
+  }
 
-  // 1. Buat Tenant
+  // 2. Insert record Tenant baru ke database
   const { data: tenant, error: tenantError } = await supabase
     .from('tenants')
-    .insert({ name, slug })
-    .select('id')
-    .single();
+    .insert({
+      name,
+      slug,
+    })
+    .select()
+    .single()
 
-  if (tenantError || !tenant) {
-    console.error('Error creating tenant:', tenantError?.message);
-    return;
+  if (tenantError) {
+    return redirect(`/onboarding?error=${encodeURIComponent(tenantError.message)}`)
   }
 
-  // 2. Hubungkan User sebagai OWNER di tenant_memberships
-  const { error: memberError } = await supabase.from('tenant_memberships').insert({
-    tenant_id: tenant.id,
-    user_id: user.id,
-    role: 'OWNER',
-  });
+  // 3. Hubungkan User dengan Tenant baru sebagai 'owner'
+  const { error: memberError } = await supabase
+    .from('tenant_users')
+    .insert({
+      tenant_id: tenant.id,
+      user_id: user.id,
+      role: 'owner',
+    })
 
   if (memberError) {
-    console.error('Error assigning membership:', memberError.message);
-    return;
+    return redirect(`/onboarding?error=${encodeURIComponent(memberError.message)}`)
   }
 
-  redirect('/dashboard');
+  // 4. Refresh layout cache dan alihkan user ke Dashboard Utama
+  revalidatePath('/', 'layout')
+  redirect('/dashboard')
 }

@@ -1,57 +1,86 @@
-import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
-import crypto from 'crypto';
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import { verifyMidtransSignature } from '@/lib/midtrans'
 
-export async function POST(req: Request) {
+export async function POST(request: Request) {
   try {
-    const body = await req.json();
-    const serverKey = process.env.MIDTRANS_SERVER_KEY;
+    const body = await request.json()
 
-    if (!serverKey) {
-      return NextResponse.json({ error: 'Server Key not configured' }, { status: 500 });
+    const {
+      order_id,
+      status_code,
+      gross_amount,
+      signature_key,
+      transaction_status,
+      fraud_status,
+      payment_type,
+    } = body
+
+    // 1. Verifikasi Keaslian Webhook Signature SHA-512
+    const isValidSignature = verifyMidtransSignature(
+      order_id,
+      status_code,
+      gross_amount,
+      signature_key
+    )
+
+    if (!isValidSignature) {
+      return NextResponse.json({ error: 'Invalid signature key' }, { status: 403 })
     }
 
-    // 1. Verifikasi Signature Key Midtrans
-    const hash = crypto
-      .createHash('sha512')
-      .update(`${body.order_id}${body.status_code}${body.gross_amount}${serverKey}`)
-      .digest('hex');
+    const supabase = await createClient()
 
-    if (hash !== body.signature_key) {
-      return NextResponse.json({ error: 'Invalid signature' }, { status: 403 });
+    // 2. Ambil Status Order Saat Ini (Idempotency Check)
+    const { data: order, error: fetchError } = await supabase
+      .from('orders')
+      .select('id, status, tenant_id')
+      .eq('id', order_id)
+      .single()
+
+    if (fetchError || !order) {
+      return NextResponse.json({ error: 'Order not found' }, { status: 404 })
     }
 
-    const transactionStatus = body.transaction_status;
-    const orderId = body.order_id;
-
-    let paymentStatus = 'PENDING';
-
-    if (transactionStatus === 'capture' || transactionStatus === 'settlement') {
-      paymentStatus = 'PAID';
-    } else if (
-      transactionStatus === 'cancel' ||
-      transactionStatus === 'deny' ||
-      transactionStatus === 'expire'
-    ) {
-      paymentStatus = 'FAILED';
+    // Jika order sudah dibayar/selesai, abaikan request duplikat (Idempotent)
+    if (order.status === 'PAID' || order.status === 'COMPLETED') {
+      return NextResponse.json({ message: 'Order already processed' }, { status: 200 })
     }
 
-    const supabase = await createClient();
+    // 3. Tentukan Status Transaksi Baru
+    let newStatus = order.status
 
-    // 2. Update Status Transaksi di Database Canonical
-    const { error } = await supabase
-      .from('transactions')
-      .update({ payment_status: paymentStatus })
-      .eq('id', orderId);
-
-    if (error) {
-      console.error('Webhook Update Error:', error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (transaction_status === 'capture') {
+      if (fraud_status === 'challenge') {
+        newStatus = 'PENDING'
+      } else if (fraud_status === 'accept') {
+        newStatus = 'PAID'
+      }
+    } else if (transaction_status === 'settlement') {
+      newStatus = 'PAID'
+    } else if (transaction_status === 'cancel' || transaction_status === 'deny' || transaction_status === 'expire') {
+      newStatus = 'CANCELLED'
+    } else if (transaction_status === 'pending') {
+      newStatus = 'PENDING'
     }
 
-    return NextResponse.json({ success: true, status: paymentStatus });
-  } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: errorMessage }, { status: 500 });
+    // 4. Update Database
+    const { error: updateError } = await supabase
+      .from('orders')
+      .update({
+        status: newStatus,
+        payment_method: payment_type || 'qris/gateway',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', order_id)
+
+    if (updateError) {
+      console.error('Error updating order webhook status:', updateError.message)
+      return NextResponse.json({ error: 'Failed to update order' }, { status: 500 })
+    }
+
+    return NextResponse.json({ status: 'success', newStatus }, { status: 200 })
+  } catch (err: any) {
+    console.error('Webhook Handler Error:', err.message)
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }
 }

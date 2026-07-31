@@ -1,144 +1,137 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useState, useEffect, useTransition } from 'react'
+import { getTenantSettings, updateTenantSettings, TenantSettings } from './actions'
 
 export default function SettingsPage() {
-  const [storeName, setStoreName] = useState('')
-  const [tenantId, setTenantId] = useState('')
-  const [userEmail, setUserEmail] = useState('')
+  const [settings, setSettings] = useState<TenantSettings | null>(null)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState('')
-
-  const supabase = createClient()
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [isPending, startTransition] = useTransition()
 
   useEffect(() => {
-    const loadSettings = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        setUserEmail(user.email || '')
-        
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('tenant_id, tenants(name)')
-          .eq('id', user.id)
-          .single()
-
-        if (profile) {
-          setTenantId(profile.tenant_id)
-          const tenant = profile.tenants as unknown as { name: string } | null
-          setStoreName(tenant?.name || '')
-        }
-      }
+    async function loadSettings() {
+      setLoading(true)
+      const data = await getTenantSettings()
+      setSettings(data)
       setLoading(false)
     }
-
     loadSettings()
   }, [])
 
-  // Update Nama Toko
-  const handleUpdateStore = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    if (!storeName.trim() || !tenantId) return
+    setMessage(null)
 
-    setSaving(true)
-    setMessage('')
+    const formData = new FormData(e.currentTarget)
 
-    const { error } = await supabase
-      .from('tenants')
-      .update({ name: storeName.trim() })
-      .eq('id', tenantId)
-
-    if (error) {
-      setMessage('⚠️ Gagal memperbarui nama toko.')
-    } else {
-      setMessage('✅ Nama toko berhasil diperbarui!')
-      setTimeout(() => window.location.reload(), 1000)
-    }
-    setSaving(false)
-  }
-
-  // Logout Handler
-  const handleLogout = async () => {
-    await supabase.auth.signOut()
-    window.location.href = '/login'
+    startTransition(async () => {
+      const result = await updateTenantSettings(formData)
+      if (result?.error) {
+        setMessage({ type: 'error', text: result.error })
+      } else {
+        setMessage({ type: 'success', text: 'Pengaturan toko berhasil diperbarui!' })
+      }
+    })
   }
 
   if (loading) {
-    return <div className="p-8 text-slate-500 text-sm">Memuat pengaturan...</div>
+    return <div className="p-8 text-center text-gray-500">Memuat pengaturan toko...</div>
   }
 
   return (
-    <div className="max-w-2xl space-y-8">
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Pengaturan Toko</h1>
-        <p className="text-slate-500 text-sm mt-0.5">
-          Kelola profil toko dan sesi akun kamu.
-        </p>
+        <h1 className="text-2xl font-bold tracking-tight text-gray-900">Pengaturan Toko & Branding</h1>
+        <p className="text-sm text-gray-500">Kelola identitas bisnis dan penyesuaian cetak struk tenant Anda.</p>
       </div>
 
       {message && (
-        <div className="p-3 bg-slate-100 rounded-lg text-sm font-medium text-slate-800">
-          {message}
+        <div
+          className={`p-4 rounded-lg text-sm font-medium ${
+            message.type === 'success'
+              ? 'bg-green-50 text-green-700 border border-green-200'
+              : 'bg-red-50 text-red-700 border border-red-200'
+          }`}
+        >
+          {message.text}
         </div>
       )}
 
-      {/* Form Profil Toko */}
-      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-        <h3 className="font-bold text-slate-900 text-base border-b border-slate-100 pb-3">
-          Informasi Toko
-        </h3>
+      <form onSubmit={handleSubmit} className="bg-white border rounded-xl p-6 shadow-sm space-y-6">
+        <div className="space-y-4">
+          <h2 className="text-base font-semibold text-gray-900 border-b pb-2">Informasi Umum</h2>
 
-        <form onSubmit={handleUpdateStore} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Nama Toko / Perusahaan
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nama Toko / Bisnis *</label>
             <input
               type="text"
-              value={storeName}
-              onChange={(e) => setStoreName(e.target.value)}
-              className="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-slate-900 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black"
+              name="name"
+              defaultValue={settings?.name || ''}
               required
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Email Pemilik Akun
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nomor Telepon / WhatsApp</label>
             <input
               type="text"
-              value={userEmail}
-              disabled
-              className="w-full px-4 py-2.5 border border-slate-200 bg-slate-50 rounded-lg text-slate-500 text-sm cursor-not-allowed"
+              name="phone"
+              defaultValue={settings?.phone || ''}
+              placeholder="08123456789"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
             />
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Alamat Toko</label>
+            <textarea
+              name="address"
+              rows={3}
+              defaultValue={settings?.address || ''}
+              placeholder="Jl. Contoh No. 123, Kota..."
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <h2 className="text-base font-semibold text-gray-900 border-b pb-2">Kustomisasi Struk Pembayaran</h2>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Pesan Header Struk</label>
+            <input
+              type="text"
+              name="receipt_header"
+              defaultValue={settings?.receipt_header || ''}
+              placeholder="Selamat Datang di Toko Kami!"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Pesan Footer Struk</label>
+            <input
+              type="text"
+              name="receipt_footer"
+              defaultValue={settings?.receipt_footer || ''}
+              placeholder="Terima kasih atas kunjungan Anda!"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end pt-4 border-t">
           <button
             type="submit"
-            disabled={saving || !storeName.trim()}
-            className="px-5 py-2.5 bg-black text-white text-xs font-semibold rounded-lg hover:bg-slate-800 disabled:bg-slate-300 transition-colors"
+            disabled={isPending}
+            className="px-6 py-2.5 bg-blue-600 text-white font-medium text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 transition"
           >
-            {saving ? 'Menyimpan...' : 'Simpan Perubahan'}
+            {isPending ? 'Menyimpan...' : 'Simpan Perubahan'}
           </button>
-        </form>
-      </div>
-
-      {/* Sesi & Logout */}
-      <div className="bg-white p-6 rounded-xl border border-red-100 shadow-sm space-y-3">
-        <h3 className="font-bold text-red-600 text-base">Keluar Sesi</h3>
-        <p className="text-xs text-slate-500">
-          Keluar dari akun aplikasi Billing SaaS ini.
-        </p>
-        <button
-          onClick={handleLogout}
-          className="px-4 py-2.5 bg-red-600 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition-colors"
-        >
-          Logout Dari Akun
-        </button>
-      </div>
+        </div>
+      </form>
     </div>
   )
 }

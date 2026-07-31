@@ -1,215 +1,132 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
+import { useState, useEffect } from 'react'
+import { getInvoices, getInvoiceDetails } from './actions'
 
-interface Invoice {
+interface InvoiceSummary {
   id: string
-  invoice_number: string
-  amount: number
-  status: 'unpaid' | 'paid' | 'cancelled'
-  due_date: string | null
+  total_amount: number
+  payment_method: string
+  status: string
   created_at: string
-  customers: { name: string } | null
+  order_items: { id: string }[]
 }
 
-interface Customer {
+interface InvoiceDetail {
   id: string
-  name: string
+  total_amount: number
+  payment_method: string
+  status: string
+  created_at: string
+  order_items: {
+    id: string
+    quantity: number
+    unit_price: number
+    subtotal: number
+    product_id: string
+    products:
+      | { name: string; sku: string | null }
+      | { name: string; sku: string | null }[]
+      | null
+  }[]
 }
 
 export default function InvoicesPage() {
-  const [invoices, setInvoices] = useState<Invoice[]>([])
-  const [customers, setCustomers] = useState<Customer[]>([])
+  const [invoices, setInvoices] = useState<InvoiceSummary[]>([])
+  const [selectedInvoice, setSelectedInvoice] = useState<InvoiceDetail | null>(null)
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-
-  // Form State
-  const [customerId, setCustomerId] = useState('')
-  const [amount, setAmount] = useState('')
-  const [dueDate, setDueDate] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-
-  const supabase = createClient()
-
-  // 1. Fetch Invoices & Customers
-  const fetchData = async () => {
-    setLoading(true)
-
-    // Fetch Invoices beserta Relasi Customer
-    const { data: invData } = await supabase
-      .from('invoices')
-      .select('*, customers(name)')
-      .order('created_at', { ascending: false })
-
-    // Fetch Customer List untuk Dropdown Form
-    const { data: custData } = await supabase
-      .from('customers')
-      .select('id, name')
-      .order('name', { ascending: true })
-
-    setInvoices((invData as unknown as Invoice[]) || [])
-    setCustomers(custData || [])
-    setLoading(false)
-  }
+  const [loadingDetail, setLoadingDetail] = useState(false)
 
   useEffect(() => {
-    fetchData()
+    async function loadInvoices() {
+      setLoading(true)
+      const data = await getInvoices()
+      setInvoices((data as unknown) as InvoiceSummary[])
+      setLoading(false)
+    }
+    loadInvoices()
   }, [])
 
-  // 2. Handle Tambah Invoice
-  const handleCreateInvoice = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!amount || !customerId) return
-
-    setSubmitting(true)
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('User tidak ditemukan')
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('tenant_id')
-        .eq('id', user.id)
-        .single()
-
-      if (!profile?.tenant_id) throw new Error('Tenant ID tidak ditemukan')
-
-      // Generate Nomor Invoice Unik (Format: INV-YYMMDD-XXX)
-      const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '')
-      const randomNum = Math.floor(100 + Math.random() * 900)
-      const invoiceNum = `INV-${dateStr}-${randomNum}`
-
-      const { error } = await supabase.from('invoices').insert([
-        {
-          tenant_id: profile.tenant_id,
-          customer_id: customerId,
-          invoice_number: invoiceNum,
-          amount: parseFloat(amount),
-          due_date: dueDate || null,
-          status: 'unpaid'
-        }
-      ])
-
-      if (error) throw error
-
-      // Reset Form & Close Modal
-      setCustomerId('')
-      setAmount('')
-      setDueDate('')
-      setShowModal(false)
-      fetchData()
-    } catch (error: any) {
-      alert(error.message || 'Gagal membuat invoice')
-    } finally {
-      setSubmitting(false)
-    }
+  const handleOpenDetail = async (id: string) => {
+    setLoadingDetail(true)
+    const detail = await getInvoiceDetails(id)
+    setSelectedInvoice((detail as unknown) as InvoiceDetail)
+    setLoadingDetail(false)
   }
 
-  // 3. Toggle Status (Lunas / Belum Lunas)
-  const toggleStatus = async (id: string, currentStatus: string) => {
-    const newStatus = currentStatus === 'unpaid' ? 'paid' : 'unpaid'
-    
-    const { error } = await supabase
-      .from('invoices')
-      .update({ status: newStatus })
-      .eq('id', id)
+  const handlePrint = () => {
+    window.print()
+  }
 
-    if (error) {
-      alert('Gagal mengubah status invoice')
-    } else {
-      fetchData()
+  // Helper untuk mengekstrak nama produk dengan aman (baik array maupun object)
+  const getProductName = (products: InvoiceDetail['order_items'][number]['products']) => {
+    if (!products) return 'Produk dihapus'
+    if (Array.isArray(products)) {
+      return products[0]?.name || 'Produk dihapus'
     }
+    return products.name || 'Produk dihapus'
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Manajemen Tagihan</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
-            Buat, lacak, dan kelola invoice pembayaran pelanggan toko kamu.
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900">Riwayat Invoice & Transaksi</h1>
+          <p className="text-sm text-gray-500">Kelola dan tinjau seluruh bukti transaksi penjualan tenant Anda.</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="px-4 py-2.5 bg-black text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition-colors shadow-sm self-start sm:self-auto"
-        >
-          + Buat Invoice Baru
-        </button>
       </div>
 
-      {/* Invoice Table */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      {/* Tabel Utama Invoices */}
+      <div className="bg-white border rounded-lg shadow-sm overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-slate-500 text-sm">
-            Memuat data tagihan...
-          </div>
+          <div className="p-8 text-center text-gray-500">Memuat data invoice...</div>
         ) : invoices.length === 0 ? (
-          <div className="p-12 text-center">
-            <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">
-              🧾
-            </div>
-            <h4 className="text-slate-700 font-semibold text-sm">Belum ada invoice</h4>
-            <p className="text-slate-400 text-xs mt-1">
-              Klik "+ Buat Invoice Baru" untuk membuat tagihan pembayaran pertama.
-            </p>
-          </div>
+          <div className="p-8 text-center text-gray-500">Belum ada transaksi tercatat.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                  <th className="p-4">No. Invoice</th>
-                  <th className="p-4">Pelanggan</th>
-                  <th className="p-4">Total Tagihan</th>
-                  <th className="p-4">Jatuh Tempo</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4 text-right">Aksi</th>
+            <table className="w-full text-left text-sm text-gray-600">
+              <thead className="bg-gray-50 text-gray-700 uppercase text-xs font-semibold border-b">
+                <tr>
+                  <th className="px-6 py-3">ID Transaksi</th>
+                  <th className="px-6 py-3">Tanggal</th>
+                  <th className="px-6 py-3">Metode Bayar</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3 text-right">Total</th>
+                  <th className="px-6 py-3 text-center">Aksi</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
+              <tbody className="divide-y divide-gray-200">
                 {invoices.map((inv) => (
-                  <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="p-4 font-mono font-bold text-slate-900">{inv.invoice_number}</td>
-                    <td className="p-4 font-medium text-slate-800">{inv.customers?.name || 'Pelanggan Umum'}</td>
-                    <td className="p-4 font-bold text-slate-900">
-                      Rp {Number(inv.amount).toLocaleString('id-ID')}
+                  <tr key={inv.id} className="hover:bg-gray-50 transition">
+                    <td className="px-6 py-4 font-mono font-medium text-gray-900">
+                      #{inv.id.substring(0, 8)}
                     </td>
-                    <td className="p-4 text-slate-500 text-xs">
-                      {inv.due_date ? new Date(inv.due_date).toLocaleDateString('id-ID') : '-'}
+                    <td className="px-6 py-4">
+                      {new Date(inv.created_at).toLocaleString('id-ID', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })}
                     </td>
-                    <td className="p-4">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold capitalize ${
-                        inv.status === 'paid' 
-                          ? 'bg-emerald-100 text-emerald-800' 
-                          : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {inv.status === 'paid' ? 'Lunas' : 'Belum Bayar'}
+                    <td className="px-6 py-4 uppercase font-semibold text-xs">
+                      <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                        {inv.payment_method}
                       </span>
                     </td>
-                    <td className="p-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Link
-                          href={`/dashboard/invoices/${inv.id}`}
-                          className="text-xs px-2.5 py-1.5 rounded-md font-semibold border border-slate-200 text-slate-700 hover:bg-slate-100 transition-colors"
-                        >
-                          Detail
-                        </Link>
-                        <button
-                          onClick={() => toggleStatus(inv.id, inv.status)}
-                          className={`text-xs px-3 py-1.5 rounded-md font-semibold transition-colors ${
-                            inv.status === 'paid'
-                              ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                              : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                          }`}
-                        >
-                          {inv.status === 'paid' ? 'Tandai Belum Lunas' : 'Tandai Lunas'}
-                        </button>
-                      </div>
+                    <td className="px-6 py-4">
+                      <span className="px-2.5 py-1 rounded-full bg-green-50 text-green-700 border border-green-200 text-xs font-medium uppercase">
+                        {inv.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right font-bold text-gray-900">
+                      Rp {inv.total_amount.toLocaleString('id-ID')}
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <button
+                        onClick={() => handleOpenDetail(inv.id)}
+                        className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 transition"
+                      >
+                        Lihat Struk
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -219,84 +136,74 @@ export default function InvoicesPage() {
         )}
       </div>
 
-      {/* MODAL BUAT INVOICE */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-slate-100 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-slate-900 text-lg">Buat Invoice Baru</h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateInvoice} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Pilih Pelanggan *
-                </label>
-                {customers.length === 0 ? (
-                  <p className="text-xs text-red-500 italic">
-                    Belum ada pelanggan. Tambahkan pelanggan dulu di menu Pelanggan.
+      {/* Modal Detail Invoice & Struk */}
+      {(selectedInvoice || loadingDetail) && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4 print:p-0 print:shadow-none print:w-full print:max-w-none">
+            {loadingDetail ? (
+              <div className="text-center py-8 text-gray-500">Memuat detail struk...</div>
+            ) : selectedInvoice ? (
+              <>
+                <div className="text-center border-b pb-4 print:border-b-2">
+                  <h2 className="text-xl font-bold text-gray-900">STRUK PENJUALAN</h2>
+                  <p className="text-xs text-gray-500 font-mono mt-1">ID: #{selectedInvoice.id}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {new Date(selectedInvoice.created_at).toLocaleString('id-ID')}
                   </p>
-                ) : (
-                  <select
-                    value={customerId}
-                    onChange={(e) => setCustomerId(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black"
-                    required
+                </div>
+
+                {/* Items List */}
+                <div className="space-y-2 py-2 text-sm">
+                  {selectedInvoice.order_items.map((item) => (
+                    <div key={item.id} className="flex justify-between items-start text-xs">
+                      <div>
+                        <p className="font-medium text-gray-900">
+                          {getProductName(item.products)}
+                        </p>
+                        <p className="text-gray-500">
+                          {item.quantity} x Rp {item.unit_price.toLocaleString('id-ID')}
+                        </p>
+                      </div>
+                      <p className="font-semibold text-gray-900">
+                        Rp {item.subtotal.toLocaleString('id-ID')}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Total & Payment Details */}
+                <div className="border-t pt-3 space-y-1.5 text-xs print:border-t-2">
+                  <div className="flex justify-between text-sm font-bold text-gray-900 pt-1">
+                    <span>Total Transaksi</span>
+                    <span>Rp {selectedInvoice.total_amount.toLocaleString('id-ID')}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>Metode Pembayaran</span>
+                    <span className="uppercase font-semibold">{selectedInvoice.payment_method}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>Status</span>
+                    <span className="uppercase font-semibold">{selectedInvoice.status}</span>
+                  </div>
+                </div>
+
+                {/* Action Buttons (Hidden when printing) */}
+                <div className="flex space-x-2 pt-4 border-t print:hidden">
+                  <button
+                    onClick={handlePrint}
+                    className="flex-1 py-2 bg-blue-600 text-white font-medium text-sm rounded hover:bg-blue-700 transition"
                   >
-                    <option value="">-- Pilih Pelanggan --</option>
-                    {customers.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Nominal Tagihan (Rp) *
-                </label>
-                <input
-                  type="number"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="Contoh: 500000"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Tanggal Jatuh Tempo
-                </label>
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={(e) => setDueDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting || !amount || !customerId}
-                  className="px-4 py-2 text-xs font-medium bg-black text-white rounded-lg hover:bg-slate-800 disabled:bg-slate-300 transition-colors"
-                >
-                  {submitting ? 'Memproses...' : 'Simpan Invoice'}
-                </button>
-              </div>
-            </form>
+                    Cetak / Print
+                  </button>
+                  <button
+                    onClick={() => setSelectedInvoice(null)}
+                    className="py-2 px-4 bg-gray-100 text-gray-700 font-medium text-sm rounded hover:bg-gray-200 transition"
+                  >
+                    Tutup
+                  </button>
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
       )}

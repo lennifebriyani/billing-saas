@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import PrintButton from './PrintButton'
+import PayButton from './PayButton'
 
 interface InvoiceDetailPageProps {
   params: Promise<{ id: string }>
@@ -11,7 +12,7 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
   const { id } = await params
   const supabase = await createClient()
 
-  // Fetch Invoice Detail + Relasi Customer & Tenant
+  // 1. Fetch Invoice + Customer + Tenant
   const { data: invoice, error } = await supabase
     .from('invoices')
     .select('*, customers(*), tenants(name)')
@@ -22,12 +23,19 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
     notFound()
   }
 
+  // 2. Fetch Invoice Items
+  const { data: invoiceItems } = await supabase
+    .from('invoice_items')
+    .select('*')
+    .eq('invoice_id', id)
+
   const customer = invoice.customers as { name: string; email?: string; phone?: string; address?: string } | null
   const tenant = invoice.tenants as { name: string } | null
+  const items = invoiceItems || []
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {/* Top Action Bar (Sembunyi saat dicetak) */}
+      {/* Action Bar */}
       <div className="flex items-center justify-between print:hidden">
         <Link
           href="/dashboard/invoices"
@@ -35,14 +43,14 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
         >
           ← Kembali ke Daftar Tagihan
         </Link>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <PayButton invoiceId={invoice.id} status={invoice.status} />
           <PrintButton />
         </div>
       </div>
 
-      {/* Printable Invoice Sheet */}
+      {/* Invoice Sheet */}
       <div className="bg-white p-8 md:p-12 rounded-xl border border-slate-200 shadow-sm print:shadow-none print:border-none print:p-0">
-        {/* Header Invoice */}
         <div className="flex justify-between items-start border-b border-slate-100 pb-8">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 uppercase tracking-wide">INVOICE</h1>
@@ -54,7 +62,6 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
           </div>
         </div>
 
-        {/* Client & Date Info */}
         <div className="grid grid-cols-2 gap-8 my-8 text-sm">
           <div>
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Ditujukan Kepada:</p>
@@ -87,24 +94,39 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
           </div>
         </div>
 
-        {/* Invoice Item Table */}
+        {/* Tabel Rincian Barang / Layanan */}
         <div className="border rounded-lg border-slate-200 overflow-hidden my-8">
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
               <tr>
                 <th className="p-3.5">Deskripsi / Layanan</th>
-                <th className="p-3.5 text-right">Jumlah</th>
+                <th className="p-3.5 text-center">QTY</th>
+                <th className="p-3.5 text-right">Harga Satuan</th>
+                <th className="p-3.5 text-right">Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              <tr>
-                <td className="p-3.5 text-slate-800">
-                  Tagihan Pembayaran Layanan ({invoice.invoice_number})
-                </td>
-                <td className="p-3.5 text-right font-bold text-slate-900">
-                  Rp {Number(invoice.amount).toLocaleString('id-ID')}
-                </td>
-              </tr>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {items.length === 0 ? (
+                <tr>
+                  <td className="p-3.5" colSpan={3}>
+                    Tagihan Pembayaran ({invoice.invoice_number})
+                  </td>
+                  <td className="p-3.5 text-right font-bold">
+                    Rp {Number(invoice.amount).toLocaleString('id-ID')}
+                  </td>
+                </tr>
+              ) : (
+                items.map((item) => (
+                  <tr key={item.id}>
+                    <td className="p-3.5 font-medium">{item.description}</td>
+                    <td className="p-3.5 text-center font-mono">{item.quantity}</td>
+                    <td className="p-3.5 text-right">Rp {Number(item.unit_price).toLocaleString('id-ID')}</td>
+                    <td className="p-3.5 text-right font-bold">
+                      Rp {Number(item.amount).toLocaleString('id-ID')}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -123,7 +145,6 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
           </div>
         </div>
 
-        {/* Footer Note */}
         <div className="mt-12 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
           Terima kasih atas kerja sama Anda. Harap simpan invoice ini sebagai bukti transaksi resmi.
         </div>
