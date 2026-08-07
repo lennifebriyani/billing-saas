@@ -1,42 +1,43 @@
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
-import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
 
 export default async function DashboardLayout({
   children,
 }: {
-  children: React.ReactNode
+  children: React.ReactNode;
 }) {
-  const cookieStore = await cookies()
+  const supabase = await createClient();
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-      },
-    }
-  )
+  // 1. Verifikasi User Auth Sesi Server
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
 
-  // 1. Cek User Login
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    redirect('/login')
+  if (userError || !user) {
+    redirect('/login');
   }
 
-  // 2. Cek apakah user punya setidaknya 1 toko di tenant_users
-  const { data: tenantUsers, error } = await supabase
+  // 2. Cek keanggotaan tenant menggunakan .maybeSingle() agar tidak throw error jika 0 row
+  const { data: tenantUser, error: tenantError } = await supabase
     .from('tenant_users')
     .select('tenant_id')
     .eq('user_id', user.id)
+    .maybeSingle();
 
-  // Jika tidak punya toko sama sekali DAN tidak ada error, baru redirect ke onboarding
-  if (!error && (!tenantUsers || tenantUsers.length === 0)) {
-    redirect('/onboarding')
+  if (tenantError) {
+    console.error('[DashboardLayout] Error fetching tenant_users:', tenantError.message);
   }
 
-  return <>{children}</>
+  // Jika user belum terhubung ke tenant mana pun, arahkan ke onboarding
+  if (!tenantUser) {
+    redirect('/onboarding');
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Container utama dashboard */}
+      <main className="flex-1">{children}</main>
+    </div>
+  );
 }

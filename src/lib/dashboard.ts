@@ -1,4 +1,4 @@
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 
 export interface DashboardMetrics {
   totalRevenue: number;
@@ -9,35 +9,35 @@ export interface DashboardMetrics {
 export async function getDashboardMetrics(tenantId: string): Promise<DashboardMetrics> {
   const supabase = await createClient();
 
-  // 1. Fetch total revenue & total transaksi dari tabel transactions
-  const { data: transactionData, error: transError } = await supabase
+  // 1. Fetch total revenue DARI INVOICES yang sudah DIBAYAR (PAID)
+  const { data: invoiceData, error: invoiceError } = await supabase
+    .from('invoices')
+    .select('grand_total')
+    .eq('tenant_id', tenantId)
+    .eq('payment_status', 'PAID');
+
+  if (invoiceError) {
+    console.error('Error fetching invoice metrics:', invoiceError.message);
+  }
+  
+  const totalRevenue = invoiceData?.reduce((acc, curr) => acc + Number(curr.grand_total || 0), 0) || 0;
+
+  // 2. Fetch total transaksi dari transactions
+  const { count: totalTransactions, error: transError } = await supabase
     .from('transactions')
-    .select('total_amount, status')
+    .select('id', { count: 'exact', head: true })
     .eq('tenant_id', tenantId)
     .eq('status', 'COMPLETED');
 
-  if (transError) {
-    console.error('Error fetching transactions metrics:', transError.message);
-    throw new Error('Gagal mengambil data transaksi tenant.');
-  }
-
-  const totalRevenue = transactionData?.reduce((acc, curr) => acc + Number(curr.total_amount || 0), 0) || 0;
-  const totalTransactions = transactionData?.length || 0;
-
-  // 2. Fetch total pelanggan aktif
-  const { count: customerCount, error: customerError } = await supabase
+  // 3. Fetch total pelanggan aktif
+  const { count: activeCustomers, error: customerError } = await supabase
     .from('customers')
     .select('id', { count: 'exact', head: true })
     .eq('tenant_id', tenantId);
 
-  if (customerError) {
-    console.error('Error fetching customer count:', customerError.message);
-    throw new Error('Gagal mengambil data pelanggan.');
-  }
-
   return {
     totalRevenue,
-    totalTransactions,
-    activeCustomers: customerCount || 0,
+    totalTransactions: totalTransactions || 0,
+    activeCustomers: activeCustomers || 0,
   };
 }

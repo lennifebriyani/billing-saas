@@ -1,82 +1,68 @@
-'use client'
+'use client';
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { useState } from 'react';
+import { createTenant } from './actions';
 
 export default function OnboardingPage() {
-  const [name, setName] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const router = useRouter()
-  const supabase = createClient()
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setError(null)
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
 
-    try {
-      // Panggil 1 RPC ini, PostgreSQL yang akan urus Buat Toko + Owner + Update Profile
-      const { data: tenantId, error: rpcError } = await supabase.rpc('create_tenant_onboarding', {
-        tenant_name: name,
-      })
+    const formData = new FormData(e.currentTarget);
+    const result = await createTenant(formData);
 
-      if (rpcError) {
-        throw new Error(rpcError.message)
-      }
-
-      // Berhasil! Langsung tembus ke dashboard
-      router.push('/dashboard')
-      router.refresh()
-    } catch (err: any) {
-      console.error('Onboarding Error:', err)
-      setError(err.message || 'Terjadi kesalahan saat membuat toko.')
-    } finally {
-      setLoading(false)
+    if (result?.error) {
+      setError(result.error);
+      setLoading(false);
     }
-  }
+  };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
-      <div className="w-full max-w-md space-y-6 rounded-2xl bg-white p-8 shadow-sm border border-gray-100">
-        <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold tracking-tight text-gray-900">Setup Toko Baru</h1>
-          <p className="text-sm text-gray-600">
-            Masukkan nama toko atau perusahaan kamu untuk melanjutkan.
-          </p>
+    <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 px-4">
+      {/* Background Pattern */}
+      <div 
+        className="absolute inset-0 opacity-10 pointer-events-none"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='1' fill-rule='evenodd'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E")`,
+        }}
+      />
+
+      <div className="relative z-10 w-full max-w-md bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl p-8 border border-white/20">
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">Mulai Usaha Anda</h1>
+          <p className="text-sm text-gray-500 mt-1">Isi nama usaha Anda untuk mengaktifkan workspace billing.</p>
         </div>
 
         {error && (
-          <div className="rounded-xl bg-red-50 p-4 text-sm text-red-600 border border-red-100">
-            ⚠️ {error}
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl">
+            {error}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">
-              Nama Toko / Perusahaan
-            </label>
-            <input
-              type="text"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Contoh: PS 5 LAMBOK"
-              className="w-full rounded-xl border border-gray-300 px-4 py-3 text-gray-900 focus:border-black focus:outline-none focus:ring-1 focus:ring-black text-sm"
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nama Usaha / Outlet</label>
+            <input 
+              name="name"
+              type="text" 
+              required 
+              className="w-full px-4 py-2.5 bg-gray-50 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition-all text-gray-800"
+              placeholder="Contoh: Toko Berkah Jaya"
             />
           </div>
-
-          <button
+          <button 
             type="submit"
             disabled={loading}
-            className="w-full rounded-xl bg-black py-3.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 transition-all shadow-sm"
+            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl shadow-lg shadow-blue-600/30 transition-all disabled:opacity-50 mt-2"
           >
-            {loading ? 'Memproses...' : 'Buat Toko & Lanjutkan'}
+            {loading ? 'Memproses Workspace...' : 'Buat Workspace Usaha'}
           </button>
         </form>
       </div>
     </div>
-  )
+  );
 }

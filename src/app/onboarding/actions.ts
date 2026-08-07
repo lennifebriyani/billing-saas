@@ -1,65 +1,58 @@
-'use server'
+'use server';
 
-import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { createClient } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
 
 export async function createTenant(formData: FormData) {
-  const supabase = await createClient()
-
-  // 1. Verifikasi User yang sedang login
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser()
-
-  if (authError || !user) {
-    redirect('/login')
-  }
-
-  const name = formData.get('name') as string
-  const rawSlug = formData.get('slug') as string
-  
-  // Format slug otomatis jika tidak diisi manual
-  const slug = (rawSlug || name)
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9 -]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
+  const name = formData.get('name') as string;
 
   if (!name) {
-    return redirect('/onboarding?error=Nama%20bisnis/toko%20harus%20diisi')
+    return { error: 'Nama usaha / outlet wajib diisi.' };
   }
 
-  // 2. Insert record Tenant baru ke database
+  // Generate slug otomatis dari nama usaha (Contoh: "Toko Berkah" -> "toko-berkah")
+  const slug = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '') // Hapus karakter khusus
+    .replace(/[\s_-]+/g, '-')     // Ganti spasi/underscore dengan dash
+    .replace(/^-+|-+$/g, '');     // Hapus dash di awal/akhir
+
+  const supabase = await createClient();
+
+  // 1. Ambil user yang sedang login
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) {
+    return { error: 'Sesi login kedaluwarsa. Silakan login ulang.' };
+  }
+
+  // 2. Masukkan data tenant (name DAN slug) ke tabel tenants
   const { data: tenant, error: tenantError } = await supabase
     .from('tenants')
-    .insert({
-      name,
-      slug,
+    .insert({ 
+      name, 
+      slug: slug || `tenant-${Date.now()}` // Fallback unik jika slug kosong
     })
     .select()
-    .single()
+    .single();
 
   if (tenantError) {
-    return redirect(`/onboarding?error=${encodeURIComponent(tenantError.message)}`)
+    return { error: tenantError.message };
   }
 
-  // 3. Hubungkan User dengan Tenant baru sebagai 'owner'
-  const { error: memberError } = await supabase
+  // 3. Hubungkan user dengan tenant ke tabel tenant_users
+  const { error: mappingError } = await supabase
     .from('tenant_users')
     .insert({
       tenant_id: tenant.id,
       user_id: user.id,
       role: 'owner',
-    })
+    });
 
-  if (memberError) {
-    return redirect(`/onboarding?error=${encodeURIComponent(memberError.message)}`)
+  if (mappingError) {
+    return { error: mappingError.message };
   }
 
-  // 4. Refresh layout cache dan alihkan user ke Dashboard Utama
-  revalidatePath('/', 'layout')
-  redirect('/dashboard')
+  // 4. Redirect otomatis ke dashboard jika berhasil
+  redirect('/dashboard');
 }
